@@ -31,4 +31,39 @@ In active development. Pre-MVP.
 
 ## Setup
 
-(Setup instructions will be added in Sprint 0)
+### Prerequisites
+
+- [Bun](https://bun.sh) ≥ 1.2
+
+### Install
+
+```bash
+bun install
+```
+
+### Develop
+
+```bash
+# All apps in parallel
+bun run dev
+
+# Single app
+bun --filter @spleed/web run dev    # http://localhost:3000
+bun --filter @spleed/api run dev    # http://localhost:3001
+```
+
+### Verify
+
+```bash
+bun run typecheck    # tsc --noEmit across all workspaces
+bun run build        # turbo orchestrates next build + tsc
+bun run format       # prettier --write .
+```
+
+### Workspace layout
+
+- `apps/web` — Next.js 15 dashboard + public microsites
+- `apps/api` — Bun.serve backend (workers, queues, agent runtime, webhooks)
+- `packages/db` — Drizzle schema + migrations + RLS (Sprint 1+)
+- `packages/agents` — 6 agents: Scout, Profiler, Composer, Outreach, Gifter, Concierge (Sprint 5+)
+- `packages/shared` — types, zod schemas, tagged errors, logger

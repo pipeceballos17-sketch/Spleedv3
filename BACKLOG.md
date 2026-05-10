@@ -5,6 +5,7 @@
 > Cada item tiene: contexto + qué hacer + cuándo + dónde modificar. Cuando llegues al sprint correspondiente, lee este archivo primero.
 >
 > **Versión 0.2:** Agregados items 004-009 (manual enrichment, personal website, screenshot enrichment, social scraping ético, voice rejection, meeting notes capture).
+> **Versión 0.3:** Agregado BACKLOG-010 (Tailwind v4 + Next 15 + Turbopack config check para Sprint 9).
 
 ---
 
@@ -14,6 +15,7 @@
 - BACKLOG-001: ICP variability + channel priorities (Sprint 6)
 - BACKLOG-004: Manual enrichment via URL en iMessage (Sprint 8)
 - BACKLOG-005: Personal website enrichment (Sprint 6)
+- BACKLOG-010: Tailwind v4 + Next 15 + Turbopack config check (Sprint 9)
 
 **PHASE 2 (sprints 13+):**
 - BACKLOG-003: Profile pictures en iMessage
@@ -291,6 +293,21 @@
 - `/apps/api/routes/brief/[token]/actions.ts`
 
 **Cuándo:** Sprint 9 (frontend).
+
+---
+
+### BACKLOG-010: Tailwind v4 + Next 15 + Turbopack config
+
+**Contexto:** Tailwind v4 cambió a CSS-first config (sin `tailwind.config.js` por default) y usa el plugin `@tailwindcss/postcss`. Next 15 trae Turbopack como dev runtime default. Esta combinación tiene quirks documentados (PostCSS plugin compatibility, content scanning paths, dark mode strategy con `@theme`).
+
+**Qué hacer:** antes de instalar Tailwind v4, verificar docs oficiales actualizadas (Tailwind v4 + Next 15 + Turbopack). Confirmar versión mínima de `@tailwindcss/postcss`, que `@theme` directive en `app/globals.css` corre con HMR, y que tokens del DESIGN.md cargan vía CSS variables. Si Turbopack tiene fricción con PostCSS, fallback a webpack hasta que se estabilice.
+
+**Cuándo:** Sprint 9, antes del primer componente UI.
+
+**Dónde modificar:**
+- `/apps/web/postcss.config.mjs`
+- `/apps/web/app/globals.css`
+- `/apps/web/next.config.ts`
 
 ---
 
@@ -587,5 +604,5 @@ Spleed transcribe + extrae action items + actualiza dossier del lead + encola fo
 ---
 
 **Última actualización:** Sprint 0
-**Versión:** 0.2
+**Versión:** 0.3
 **Owner:** Felipe

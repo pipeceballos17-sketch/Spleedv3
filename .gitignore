@@ -10,6 +10,7 @@ out/
 dist/
 build/
 .turbo/
+*.tsbuildinfo
 
 # Environment (NUNCA commitear secretos)
 .env
