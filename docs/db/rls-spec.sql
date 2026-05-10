@@ -15,9 +15,27 @@
 -- =====================================================================
 -- SECTION 1: helpers.sql
 -- =====================================================================
+--
+-- CRITICAL: helpers that read from auxiliary tables (public.users, public.org_members)
+-- MUST be declared SECURITY DEFINER. Without it, the function inherits the caller's
+-- RLS context, and any SELECT it issues against those tables fires their own RLS
+-- policies recursively. For example, is_org_member SELECTs from org_members, whose
+-- own SELECT policy calls is_org_member(org_id) — infinite recursion. Postgres
+-- detects the loop and aborts with NULL data, so the caller (test/app) sees
+-- null instead of the expected rows and isolation tests fail confusingly.
+--
+-- SECURITY DEFINER runs the function as its owner (postgres) and bypasses RLS on
+-- the auxiliary tables. Combined with SET search_path = '' and fully-qualified
+-- references (public.users, auth.uid()), this is the canonical Supabase pattern
+-- for RLS helpers; it also prevents search_path injection in a definer context.
+--
+-- Functions that touch ONLY JWT claims (no table reads) — like current_org_id —
+-- stay as plain STABLE; SECURITY DEFINER is unnecessary and adds attack surface
+-- for no benefit.
 
 -- Returns the org_id from the JWT claim. NULL if not authenticated.
--- Supabase Auth puts custom claims in raw_user_meta_data; we copy org_id there at signup.
+-- The Custom Access Token Hook (03-access-token-hook.sql) injects this claim.
+-- No table access → plain STABLE; SECURITY DEFINER not required.
 CREATE OR REPLACE FUNCTION public.current_org_id()
 RETURNS uuid
 LANGUAGE sql STABLE
@@ -32,10 +50,12 @@ $$;
 CREATE OR REPLACE FUNCTION public.is_org_owner(check_org_id uuid)
 RETURNS boolean
 LANGUAGE sql STABLE
+SECURITY DEFINER
+SET search_path = ''
 AS $$
   SELECT EXISTS (
-    SELECT 1 FROM org_members om
-    INNER JOIN users u ON u.id = om.user_id
+    SELECT 1 FROM public.org_members om
+    INNER JOIN public.users u ON u.id = om.user_id
     WHERE om.org_id = check_org_id
       AND u.supabase_auth_id = auth.uid()
       AND om.role = 'owner'
@@ -46,10 +66,12 @@ $$;
 CREATE OR REPLACE FUNCTION public.is_org_member(check_org_id uuid)
 RETURNS boolean
 LANGUAGE sql STABLE
+SECURITY DEFINER
+SET search_path = ''
 AS $$
   SELECT EXISTS (
-    SELECT 1 FROM org_members om
-    INNER JOIN users u ON u.id = om.user_id
+    SELECT 1 FROM public.org_members om
+    INNER JOIN public.users u ON u.id = om.user_id
     WHERE om.org_id = check_org_id
       AND u.supabase_auth_id = auth.uid()
   );
@@ -59,8 +81,10 @@ $$;
 CREATE OR REPLACE FUNCTION public.current_user_id()
 RETURNS uuid
 LANGUAGE sql STABLE
+SECURITY DEFINER
+SET search_path = ''
 AS $$
-  SELECT id FROM users WHERE supabase_auth_id = auth.uid();
+  SELECT id FROM public.users WHERE supabase_auth_id = auth.uid();
 $$;
 
 -- =====================================================================

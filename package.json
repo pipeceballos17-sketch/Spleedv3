@@ -16,7 +16,12 @@
     "lint": "turbo run lint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "clean": "turbo run clean"
+    "clean": "turbo run clean",
+    "db:generate": "cd packages/db && bun run db:generate",
+    "db:migrate": "cd packages/db && bun run db:migrate",
+    "db:reset": "cd packages/db && bun run db:reset",
+    "db:seed": "cd packages/db && bun run db:seed",
+    "test:db": "cd packages/db && bun run test"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

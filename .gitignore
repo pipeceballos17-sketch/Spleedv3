@@ -54,3 +54,7 @@ coverage/
 # Supabase local CLI
 supabase/.branches
 supabase/.temp
+
+# Backups y variantes de .env (defensa adicional contra leaks)
+.env.*.backup
+.env.local.*
