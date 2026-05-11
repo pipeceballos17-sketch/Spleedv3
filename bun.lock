@@ -59,6 +59,9 @@
     "packages/shared": {
       "name": "@spleed/shared",
       "version": "0.0.0",
+      "dependencies": {
+        "zod": "^3.23.0",
+      },
       "devDependencies": {
         "typescript": "^5.7.0",
       },

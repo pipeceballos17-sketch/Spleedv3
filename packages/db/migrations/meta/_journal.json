@@ -8,6 +8,13 @@
       "when": 1778447891576,
       "tag": "0000_great_network",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1778538347030,
+      "tag": "0001_outstanding_wolfpack",
+      "breakpoints": true
     }
   ]
 }

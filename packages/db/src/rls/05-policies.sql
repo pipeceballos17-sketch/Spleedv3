@@ -101,3 +101,65 @@ CREATE POLICY audit_logs_member_select ON public.audit_logs
 
 -- No INSERT/UPDATE/DELETE policies on audit_logs.
 -- Service role inserts; users never mutate audit history directly.
+
+-- ---------------------------------------------------------------------
+-- icps (Sprint 2)
+-- ---------------------------------------------------------------------
+ALTER TABLE public.icps ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS icps_member_all ON public.icps;
+CREATE POLICY icps_member_all ON public.icps
+  FOR ALL
+  USING (org_id = public.current_org_id() AND public.is_org_member(org_id))
+  WITH CHECK (org_id = public.current_org_id() AND public.is_org_member(org_id));
+
+-- ---------------------------------------------------------------------
+-- leads (Sprint 2)
+-- ---------------------------------------------------------------------
+ALTER TABLE public.leads ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS leads_member_all ON public.leads;
+CREATE POLICY leads_member_all ON public.leads
+  FOR ALL
+  USING (org_id = public.current_org_id() AND public.is_org_member(org_id))
+  WITH CHECK (org_id = public.current_org_id() AND public.is_org_member(org_id));
+
+-- ---------------------------------------------------------------------
+-- lead_dossiers (Sprint 2)
+-- ---------------------------------------------------------------------
+ALTER TABLE public.lead_dossiers ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS lead_dossiers_member_all ON public.lead_dossiers;
+CREATE POLICY lead_dossiers_member_all ON public.lead_dossiers
+  FOR ALL
+  USING (org_id = public.current_org_id() AND public.is_org_member(org_id))
+  WITH CHECK (org_id = public.current_org_id() AND public.is_org_member(org_id));
+
+-- ---------------------------------------------------------------------
+-- lead_threads (Sprint 2) — append-only audit log per lead
+-- ---------------------------------------------------------------------
+ALTER TABLE public.lead_threads ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS lead_threads_member_select ON public.lead_threads;
+CREATE POLICY lead_threads_member_select ON public.lead_threads
+  FOR SELECT
+  USING (org_id = public.current_org_id() AND public.is_org_member(org_id));
+
+DROP POLICY IF EXISTS lead_threads_member_insert ON public.lead_threads;
+CREATE POLICY lead_threads_member_insert ON public.lead_threads
+  FOR INSERT
+  WITH CHECK (org_id = public.current_org_id() AND public.is_org_member(org_id));
+
+-- No UPDATE/DELETE policies on lead_threads — append-only audit log.
+-- GDPR scrub uses service role + hard delete + audit_logs entry.
+
+-- =====================================================================
+-- Enum documentation (informational, not enforced at DB level)
+-- =====================================================================
+
+COMMENT ON TYPE public.lead_status IS
+  'Lead lifecycle states. Valid transitions (informational, enforced at app layer):
+   discovered -> enriching -> enriched -> composing -> composed -> engaged.
+   engaged -> tracking <-> tracking_paused_human <-> booked.
+   tracking -> gift_pending -> tracking (gift cycle).
+   any state -> lost (founder mark or auto-breakup after no reply).';

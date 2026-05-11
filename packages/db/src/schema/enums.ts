@@ -31,3 +31,26 @@ export const agentKindEnum = pgEnum('agent_kind', [
 ])
 
 export const verbosityEnum = pgEnum('verbosity', ['terse', 'normal', 'detailed'])
+
+// Lead lifecycle. Transitions are informational (documented in 05-policies.sql
+// via COMMENT ON TYPE), enforced at application layer not at DB.
+export const leadStatusEnum = pgEnum('lead_status', [
+  'discovered',
+  'enriching',
+  'enriched',
+  'composing',
+  'composed',
+  'engaged',
+  'tracking',
+  'tracking_paused_human',
+  'gift_pending',
+  'booked',
+  'lost',
+])
+
+export const leadThreadRoleEnum = pgEnum('lead_thread_role', [
+  'agent',
+  'user',
+  'tool',
+  'system',
+])

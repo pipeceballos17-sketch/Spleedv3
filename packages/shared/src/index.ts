@@ -1,1 +1,1 @@
-export const PACKAGE_NAME = '@spleed/shared' as const
+export * from './schemas'
