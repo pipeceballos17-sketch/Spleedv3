@@ -6,6 +6,7 @@
 >
 > **Versión 0.2:** Agregados items 004-009 (manual enrichment, personal website, screenshot enrichment, social scraping ético, voice rejection, meeting notes capture).
 > **Versión 0.3:** Agregado BACKLOG-010 (Tailwind v4 + Next 15 + Turbopack config check para Sprint 9).
+> **Versión 0.4:** Agregados items 011-014 — LinkedIn engagement capture (★ HIGH VALUE), pricing & Sendblue alternativas, Lite tier deferred, competitive positioning iMessage-native. Sprint 1 cierre — 2026-05-11.
 
 ---
 
@@ -25,6 +26,14 @@
 **SPRINT 14+ (post-PMF features):**
 - BACKLOG-002: Daily Brief swipe cards (ya en Sprint 9 spec)
 - BACKLOG-009: Meeting Notes Capture ★ (HIGH VALUE)
+- BACKLOG-011: LinkedIn engagement capture + co-pilot publishing ★ (HIGH VALUE)
+
+**BUSINESS / ONGOING REVIEW:**
+- BACKLOG-012: Pricing & unit economics + Sendblue alternativas (active monitoring)
+- BACKLOG-014: Competitive positioning — iMessage-native space (refresh quarterly)
+
+**DEFERRED (analyzed, not now):**
+- BACKLOG-013: Lite tier consideration (reconsider 6 months post-MVP)
 
 **REJECTED:**
 - BACKLOG-008: Voice messages bidireccionales (iOS dictation cubre)
@@ -593,6 +602,213 @@ Spleed transcribe + extrae action items + actualiza dossier del lead + encola fo
 
 ---
 
+### ★ BACKLOG-011: LinkedIn engagement capture + co-pilot publishing
+
+**Status:** Backlog (post-MVP, target Sprint 14-16)
+**Priority:** ⭐ HIGH VALUE — potential differentiator and economic shift
+**Origin:** Founder ideation, Sprint 1 cierre (2026-05-11)
+
+**Context:**
+Outbound puro está saturado. Founders pre-seed/seed reciben docenas de DMs LinkedIn cold por semana. Conversion rate típica: 1-3%. LinkedIn inbound (engagement de posts publicados por el founder) es la otra cara: los que dan like/comment son inbound warm leads con interés ya demostrado.
+
+**Idea:**
+Spleed extiende su agentic loop a LinkedIn:
+1. Founder publica posts en LinkedIn (manual o asistido por Spleed)
+2. Spleed monitorea engagement (likes, comments, shares, profile views)
+3. Profiler agent enriquece cada engager
+4. Scout filtra por fit con ICP del founder
+5. Concierge presenta vía iMessage: "5 nuevos engagers en tu último post. 3 son tu ICP."
+6. Outreach Operator drafta DMs personalizados de follow-up
+7. Founder aprueba vía iMessage, envío
+
+**Phased Implementation:**
+
+Phase 1 — Engagement-only capture (Sprint 14, ~2 weeks)
+- Founder publica posts manualmente (Spleed NO publica)
+- Spleed monitorea engagement vía LinkedIn cookies/Apify
+- Profiler enriquece a cada engager (cross-channel)
+- Scout filtra por fit con ICP
+- Concierge envía resumen iMessage
+- Outreach Operator drafta DMs follow-up
+- Valor: 80% del impacto con 20% del riesgo
+
+Phase 2 — Co-pilot publishing (Sprint 16, ~2 weeks)
+- Composer analiza voice del founder (últimos 30 posts)
+- Composer propone post drafts basados en ICP pain points + trending topics
+- Founder edita + publica desde su cuenta nativa
+- Phase 1 captura engagement automáticamente
+
+Phase 3 — Full agentic publishing (Phase 3 producto, post-Series A)
+- Spleed publica autónomamente con approval iMessage screenshot
+- Riesgo TOS asumido conscientemente
+- Tier pricing premium ($1,500+/mes)
+- Requires legal review
+
+**Technical challenges:**
+1. LinkedIn API restrictiva (Marketing API requiere 3-6 sem approval). Likely path: scraping con cookies del usuario, zona gris TOS. Decisión ética requerida pre-implementation.
+2. Voice/tone del founder crítico. Requiere fine-tuning con samples del founder.
+3. Identificar "comments relevantes" no trivial. Costo computacional alto.
+4. LinkedIn rate limits / detection. Rate limit interno necesario.
+
+**Mapping a agents existentes (no requiere séptimo agent):**
+- Composer → extends to LinkedIn post drafts
+- Scout → extends to engagement signals as fit indicator
+- Profiler → enriches engagers same as cold leads
+- Outreach Operator → adds LinkedIn DM channel
+- Concierge → approval flow para posts + DMs
+
+**Risks:**
+- LinkedIn TOS violation puede resultar en suspension de cuenta del founder
+- Daño reputacional si se pierde cuenta de design partner
+- Decisión: nunca tomar riesgo TOS sin opt-in explícito del founder
+
+**Dependencies:**
+- Sprint 1-12 core MVP completo
+- 5-10 design partners activos validando core loop
+- Decisión ética sobre LinkedIn scraping vs API oficial
+
+**Estimated effort:**
+- Phase 1: ~2 weeks (1 sprint)
+- Phase 2: ~2 weeks (1 sprint)
+- Phase 3: ~3-4 weeks (1.5 sprints)
+- Total: 5-7 weeks de capacidad de engineering
+
+---
+
+## Business & positioning (ongoing review)
+
+### BACKLOG-012: Pricing & unit economics review + Sendblue alternativas
+
+**Status:** Backlog (active monitoring, decision points pre-defined)
+**Priority:** HIGH — affects entire business model
+**Origin:** Founder + Claude analysis, Sprint 1 cierre (2026-05-11)
+
+**Context:**
+Unit economics actual:
+- Founder tier ($497/mes annual): COGS $159.50, gross margin 68%
+- Team tier ($1,497/mes annual propuesto): COGS $622, gross margin 58%
+- Sendblue es 63% del COGS Founder tier ($100/línea)
+
+**Sendblue alternativas evaluadas:**
+
+| Provider | Pricing | Track record | SOC 2 | Decisión |
+|---|---|---|---|---|
+| **Sendblue** AI Agent | $100/línea/mes | 5+ años, miles de clientes | ✅ Sí | ✅ Mantener |
+| Blooio Starter | $89/mes | ~1 año | ❌ No | Rechazado (shared number rompe UX) |
+| Blooio Commercial | $289/mes | ~1 año | ❌ No | Rechazado (más caro que Sendblue, sin SOC 2) |
+| Linq | $500+ setup | ~1 año | ❌ No | Rechazado (sales call required) |
+| LoopMessage | $30-100 con add-ons | Limited | ❌ No | Rechazado (sin compliance) |
+| Tuco AI | $149-299/mes + $335 setup | Limited | ❌ No | Rechazado (Mac Mini per customer no escala) |
+| BlueBubbles (OSS) | $0 | OSS community | ❌ No | Rechazado (Mac físico per founder, no viable SaaS) |
+
+**Decisión final:** Sendblue por SOC 2 compliance, track record, y rate limits manageable para use case Spleed (200 follow-up contacts/día por línea, Spleed usa ~7/día).
+
+**Sendblue caveat detectado:**
+Plan AI Agent ($100/mes) está pensado para AI agents conversacionales/inbound. Outbound proactivo a cold leads técnicamente requiere "Blue Ocean plan" (custom pricing). En la práctica, mientras estamos bajo rate limits (200 follow-ups/día/línea), no es issue. Monitorear cuando founders escalen leads/mes.
+
+**Timing de negociación Sendblue (volume + annual discount):**
+
+| Etapa | Founders activos | Target/línea | Probabilidad éxito |
+|---|---|---|---|
+| Punto 1 | 15-20 | $80-85 | 50-70% |
+| Punto 2 | 30-50 | $65-70 | 80-90% |
+| Punto 3 | 100+ | $50-60 | Enterprise contract |
+
+**Acción recomendada:** Negociar a partir de 15 founders activos (probablemente Sprint 14-18). NO antes — sin leverage. NO después — pierdes savings cada mes.
+
+**Pricing validation framework:**
+
+Validar willingness-to-pay $497/mes con design partners primeros:
+1. Onboard 5 design partners con descuento friends&family ($199/mes los primeros 3 meses)
+2. Si convierten a $497 después del descuento → pricing funciona
+3. Si churnean por precio → tienes datos reales para decidir Lite vs price drop
+
+**No deshacer pricing actual antes de validar.**
+
+---
+
+### BACKLOG-013: Lite tier consideration (DEFERRED)
+
+**Status:** Deferred — analyzed and consciously decided NOT to launch now
+**Priority:** Low (reconsider only after MVP validation)
+**Origin:** Founder question, Sprint 1 cierre (2026-05-11)
+
+**Pregunta original:**
+¿Lanzar tier Lite ($99/mes) con features reducidas para reducir friction de venta y aumentar volume de design partners?
+
+**Decisión: NO lanzar Lite tier ahora.**
+
+**Razones del NO:**
+
+1. **Lite mata el core differentiator.** Sin iMessage Concierge (Sendblue $100/mes incluido), Spleed sería "outbound automation with personalization" — commoditizado. Founders que prueban Lite NO experimentan el wow moment real del producto.
+
+2. **Margin alto no compensa si destruye funnel premium.** 100 Lite × $99 = $9,900/mes vs 100 Founder × $497 = $49,700/mes. Mismo CAC, 5x más revenue con Founder tier.
+
+3. **Lite atrae al ICP equivocado.** Founders con $10K+ MRR (tu ICP) NO son price-sensitive a $99 vs $497. Founders sin MRR (idea-stage) sí — pero su problema real es product-market fit, no outbound. Churn esperado.
+
+4. **Pricing tier proliferation kills focus.** Cada tier requiere product decisions, marketing copy, onboarding distinto. Para founder solo, fragmentar atención cuando deberías concentrarla en tier principal.
+
+5. **Solucionas problema percibido, no real.** No has validado que $497 sea barrera. Validar primero, ajustar después.
+
+**Plan alternativo:**
+
+- MVP launch con SOLO Founder tier ($497/mes annual)
+- Free trial 14-21 días para reducir friction sin bajar precio
+- Si después de 3-6 meses con design partners hay resistencia clara a precio:
+  - Considerar Founder tier más bajo ($297/mes — no $99, mantiene iMessage)
+  - O "Spleed Outbound" como producto separado sin iMessage (target ICP distinto)
+
+**Reconsider trigger:** 6 meses post-MVP launch con datos reales de design partners.
+
+---
+
+### BACKLOG-014: Competitive positioning — iMessage-native space
+
+**Status:** Backlog (active research, refresh quarterly)
+**Priority:** Medium — informs marketing + positioning
+**Origin:** Competitive analysis Sprint 1 cierre (2026-05-11)
+
+**Hallazgo principal:**
+El espacio iMessage-native para B2B founder sales está prácticamente vacío. Spleed sería primer iMessage-native sales tool específicamente para founders.
+
+**Landscape analizado:**
+
+**Categoría A — iMessage-native:**
+- **Ditto** ($9.2M seed, 42K usuarios, 25% organic growth) → consumer dating, iMessage-only UX. Valida tesis iMessage como interfaz primaria.
+- **Tuco AI** ($149-299/mes + $335 setup) → general B2B messaging, Mac Mini per customer, no founder-specific.
+- **Spleed** → único iMessage-native para B2B founder sales.
+
+**Categoría B — AI SDRs tradicionales (no iMessage):**
+- 17+ tools revisados (AiSDR, Artisan, 11x.ai, Coldreach, Salesforge, Amplemarket, Landbase, Apollo, Clay, etc.)
+- Todos usan email + LinkedIn + occasional SMS/phone
+- Dashboard-heavy UX
+- Pricing $79-3,960/user/mes
+- Ninguno usa iMessage como canal primario
+
+**Categoría C — CRMs + iMessage como add-on:**
+- GoHighLevel + Sendblue
+- HubSpot + Sendblue
+- Salesforce + Sendblue
+- iMessage es side channel, no producto core
+
+**Implicación estratégica:**
+1. Ventana competitiva 6-18 meses antes que alguien más vea el espacio
+2. Posicionamiento "iMessage-native sales tool" debe ancarse antes que alguien más reclame esa posición
+3. Founding manifesto sugerido: "Tu próximo lead no está en un dashboard. Está en tu iMessage."
+
+**Threats:**
+- Ditto pivot a B2B (improbable, su brand es consumer)
+- Tuco AI especializa en founder sales (posible, requires refocus)
+- Apollo/Clay agregan iMessage native (conflicts con su modelo dashboard, más probable que agreguen como otro canal)
+- Nueva startup similar (posible, 6-18 meses ventana)
+
+**Acción recomendada:**
+1. Refresh este análisis cada Q (cambios competitivos rápidos en AI sales)
+2. Cuando salgas a design partners, posicionar agresivamente como "iMessage-native"
+3. Monitorear Ditto roadmap (profesional networking expansion mencionada)
+
+---
+
 ## Cómo se mantiene este archivo
 
 - Cuando una decisión de producto se difiere conscientemente, se agrega aquí
@@ -603,6 +819,6 @@ Spleed transcribe + extrae action items + actualiza dossier del lead + encola fo
 
 ---
 
-**Última actualización:** Sprint 0
-**Versión:** 0.3
+**Última actualización:** Sprint 1 cierre — 2026-05-11
+**Versión:** 0.4
 **Owner:** Felipe
