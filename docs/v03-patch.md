@@ -121,3 +121,37 @@ El `BACKLOG.md` va en raíz también (hermano de `CLAUDE.md`).
 
 **Versión patch:** 0.3
 **Owner:** Felipe
+
+---
+
+## Reversión post-Sprint 2 (2026-05-11)
+
+La v0.3 difería browser a Phase 2 (Sprint 14-16). Durante el cierre de Sprint 2, revisamos esta decisión con análisis honesto:
+
+PROBLEMA detectado en API-only approach (MVP):
+- Apify scrapers pierden 40-60% de signals visuales (engagement patterns, comment threads, behavioral)
+- Apollo API tiene caps + ~60-70% hit rate
+- Account-level signals invisibles via API
+- Anti-hallucination via screenshots IMPOSIBLE sin browser
+- Sin continuidad de sesión (cada call es stateless)
+
+DECISIÓN: Adelantar browser a Sprint 6 con agent-browser de Vercel.
+
+Justificación:
+- agent-browser maduro (32.7K stars, producción 2026)
+- Encapsula Chrome profiles persistentes, daemon, AgentCore cloud
+- Setup mínimo vs construir browser infra propia
+- Diferenciador real desde MVP (autonomía dirigida con cobertura real)
+
+Trade-offs:
+- COGS Founder tier: $159.50 → $169.50/mes (+$10 browser cloud)
+- Margin: 68% → 66% (-2pp)
+- Sprint 6 más denso (~+1-2 días)
+- Sprint 14 liberado (era browser Phase 2 → ahora disponible)
+
+Roadmap ajustado:
+- Sprint 5: Scout (Haiku) API-only discovery
+- Sprint 6: Profiler (Sonnet) + agent-browser para top 30% leads
+- Sprint 7: Composer cita evidence (screenshots) del dossier
+- Sprint 8+: Outreach, Concierge, Gifter sin cambios
+- Sprint 14: LIBERADO (puede ir a BACKLOG-011 LinkedIn capture)

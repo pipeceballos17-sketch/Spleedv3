@@ -432,7 +432,7 @@ Ver sección 4 para schema. Outputs:
 
 ### Sprint 5-8 — Los 5 agentes
 - Sprint 5: Scout end-to-end (input ICP → output 50 leads en columna Discovered)
-- Sprint 6: Profiler end-to-end (output dossier rico de cada lead). **Critical week** — calidad del Profiler determina todo lo siguiente
+- Sprint 6: Profiler end-to-end (output dossier rico de cada lead) con agent-browser de Vercel para top 30% leads por fit_score (browser-strategic enrichment). **Critical week** — calidad del Profiler determina todo lo siguiente
 - Sprint 7: Composer + Outreach Operator (microsite + email/LI sent)
 - Sprint 8: Gifter + iMessage approval flow + Stripe Issuing
 
@@ -441,6 +441,8 @@ Ver sección 4 para schema. Outputs:
 - Sprint 10: Onboarding 5 design partners, fixes según feedback
 - Sprint 11: Stripe billing real, primeros pagos
 - Sprint 12: Hardening, security review, runbooks
+
+> **DECISION 2026-05-11 (cierre Sprint 2):** Browser strategy adelantado de Phase 2 a Sprint 6. Justificación: agent-browser de Vercel (32.7K stars GitHub, producción) encapsula la complejidad de Phase 2 con setup mínimo. Beneficio: producto realmente diferenciado desde MVP (autonomía dirigida con cobertura real, anti-hallucination via screenshots, behavioral signals). Costo: ~$15/founder/mes adicional COGS (browser cloud sessions). Margin Founder tier: 68% → 66%.
 
 ---
 

@@ -791,6 +791,49 @@ El espacio iMessage-native para B2B founder sales está prácticamente vacío. S
 - Salesforce + Sendblue
 - iMessage es side channel, no producto core
 
+**Categoría D — AI-native revenue platforms (competidores directos):**
+- **Monaco** (monaco.com) — "The first revenue engine for startups"
+  - Inversores: Garry Tan (YC CEO), Peter Thiel (Founders Fund), Ryan Petersen (Flexport founder)
+  - Posicionamiento: All-in-one CRM replacement + agentic platform
+  - Features: TAM builder, outbound automation, pipeline management, call recording, sequences, CRO Copilot, forward-deployed sales exec
+  - Onboarding: white-glove + human sales executive
+  - Pricing: hidden (request demo, probable $1,000-5,000+/mes)
+  - Target: "startups" (general, no founder-specific)
+  - Detectado: 2026-05-11
+
+**Análisis competitivo Monaco vs Spleed:**
+
+Overlap real:
+- AI agents para sales automation
+- Multi-tenant SaaS for founders
+- Outbound automation + pipeline
+
+Spleed differentiators NO replicables fácilmente:
+- iMessage-native interface (Monaco es dashboard-first)
+- Integrated gifting via Stripe Issuing (Monaco no menciona)
+- Personalized microsites per lead (Monaco no tiene)
+- Approval flow via iMessage (Monaco autonomous-by-default)
+- Founder-specific niche con $10K+ MRR ICP (Monaco generic)
+
+Monaco strengths que Spleed no replica:
+- Call recording + meeting capture
+- CRM completo (Spleed es complementario, no replacement)
+- Forward-deployed sales executive (humanos en the loop)
+- Network YC + Thiel + Petersen distribution
+
+**Validación del mercado:**
+- Monaco existiendo VALIDA que el problema founder-led sales es real y monetizable
+- VALIDA que AI agents > CRMs tradicionales como approach
+- VALIDA que founders están dispuestos a pagar para resolver esto
+- NO valida que el specific approach de Spleed (iMessage-native + gifting + microsites) gane
+
+**Implicación estratégica (vs Monaco):**
+- No competir feature-by-feature con Monaco (perdería war de capital)
+- Mantener focus en diferenciadores únicos
+- Acelerar Sprint 5-7 (los visibles del producto) para tener demo competitivo antes que Monaco se establezca enterprise
+- Cuando lleguen design partners (Sprint 12+), posicionar EXPLICITLY: "Monaco resuelve CRM replacement, Spleed resuelve founder-led sales sin SDR en tu iMessage"
+- NUNCA mencionar Monaco proactivamente en chats con makers/customers
+
 **Implicación estratégica:**
 1. Ventana competitiva 6-18 meses antes que alguien más vea el espacio
 2. Posicionamiento "iMessage-native sales tool" debe ancarse antes que alguien más reclame esa posición
@@ -806,6 +849,63 @@ El espacio iMessage-native para B2B founder sales está prácticamente vacío. S
 1. Refresh este análisis cada Q (cambios competitivos rápidos en AI sales)
 2. Cuando salgas a design partners, posicionar agresivamente como "iMessage-native"
 3. Monitorear Ditto roadmap (profesional networking expansion mencionada)
+
+---
+
+### BACKLOG-015: Meeting note-taker propio + integrations layer
+
+**Status:** Backlog (post-MVP, target Sprint 15-18)
+**Priority:** MEDIUM — extends Spleed surface area beyond cold outreach
+**Origin:** Founder ideation (2026-05-11), Sprint 2 cierre
+
+**Context:**
+Spleed actualmente captura datos de leads pre-meeting (Scout + Profiler) y post-meeting (manual feedback del founder). Hay gap: la meeting misma NO es capturada por Spleed. El founder agenda call con lead via Spleed, pero el contenido de la call vive en notas dispersas o no existe en ningún sistema accesible al producto.
+
+**Idea — Meeting note-taker:**
+Bot tipo Otter.ai/Granola/Fireflies pero integrado al pipeline de Spleed:
+1. Founder agenda call con lead via Spleed (Sprint 7-8 flow)
+2. Spleed manda calendar invite con bot incluido (Google Meet, Zoom)
+3. Bot transcribe + identifica speakers
+4. Concierge agent analiza transcript post-meeting:
+   - Pains nuevos mencionados → update lead_dossier
+   - Objections → flag para Outreach Operator
+   - Action items para founder → iMessage reminder
+   - Next steps → update lead.status (engaged → tracking)
+5. Founder recibe resumen via iMessage 5 min post-meeting
+
+**Idea — Integrations layer:**
+Bidirectional sync con tools que el founder ya usa:
+- **HubSpot** (sync leads + activities; deferir hasta confirmar que NO son competencia directa según pricing/positioning de design partners)
+- **Notion** (sync lead notes + dossiers as Notion pages para shareability)
+- **Slack** (post lead updates a #sales o canal designated)
+- **Google Calendar** (ya integrado para meetings Sprint 7-8)
+- **Linear / Asana** (track action items post-meeting)
+
+**Why phased:**
+- Phase 1: Meeting note-taker (Sprint 15) — high-value standalone
+- Phase 2: Integrations layer abstraction (Sprint 16) — agnostic API
+- Phase 3: Specific integrations on-demand (Sprint 17+) — Notion → Slack → HubSpot orden de friction
+
+**Competitive comparison:**
+- Otter.ai/Fireflies/Granola: standalone note-takers, no integran al pipeline de sales
+- Gong/Chorus: enterprise sales coaching, $500-2K/mes/seat, no founder-fit
+- Spleed differentiator: note-taker como parte del agentic loop, Concierge agent extrae insights y actúa automáticamente
+
+**Risks:**
+- Meeting bots requieren consent legal (recording laws varían por estado/país)
+- Integration maintenance overhead (cada API cambia, breaks)
+- Scope creep si tratamos de matchear feature-completeness de Otter
+
+**Dependencies:**
+- Sprint 5-12 MVP completo
+- Validation con design partners que meeting capture es valued
+- Google Calendar OAuth (Sprint 7-8)
+- Posiblemente Recall.ai SDK o similar para bot infrastructure
+
+**Estimated effort:**
+- Phase 1: ~3 weeks (1.5 sprints)
+- Phase 2: ~2 weeks
+- Phase 3: depends on número de integrations (1 week cada)
 
 ---
 

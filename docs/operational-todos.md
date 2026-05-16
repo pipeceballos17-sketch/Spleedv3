@@ -22,6 +22,13 @@
 - Cal.com decision: self-hosted vs cloud free tier (Sprint 6/7 — for booking links in microsites)
 - Sendblue account, ~$100/mes/línea (Sprint 8 — defer until first paying design partner per CLAUDE.md)
 
+### Sprint 6 prep — agent-browser de Vercel
+
+- [ ] Sign up Vercel AgentCore (cuando lleguemos a Sprint 6)
+- [ ] Decidir: local daemon vs AgentCore cloud al inicio
+- [ ] Reserve $15/founder/mes en COGS planning
+- [ ] Review agent-browser docs antes de Sprint 6 plan negotiation
+
 ## Already done (Sprint 0)
 
 - [x] GitHub repo `pipeceballos17-sketch/Spleedv3` initialized
