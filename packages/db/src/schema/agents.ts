@@ -5,6 +5,8 @@ import {
   timestamp,
   jsonb,
   boolean,
+  integer,
+  index,
   uniqueIndex,
 } from 'drizzle-orm/pg-core'
 import { sql } from 'drizzle-orm'
@@ -54,5 +56,35 @@ export const orgAgents = pgTable(
   },
   (t) => ({
     orgKindIdx: uniqueIndex('org_agents_org_kind_unique').on(t.orgId, t.kind),
+  }),
+)
+
+/**
+ * Tool call audit log. Every invocation of a registered tool by an agent gets
+ * a row here for debug, cost tracking, and rate-limit visibility.
+ * Writes come from service role only (via defineTool's audit wrapper); members
+ * can SELECT their own org's logs.
+ */
+export const toolCallLogs = pgTable(
+  'tool_call_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orgId: uuid('org_id').notNull().references(() => orgs.id, { onDelete: 'cascade' }),
+    agentKind: agentKindEnum('agent_kind').notNull(),
+    leadId: uuid('lead_id'),
+    toolName: text('tool_name').notNull(),
+    inputJson: jsonb('input_json').$type<Record<string, unknown>>().notNull(),
+    outputJson: jsonb('output_json').$type<Record<string, unknown>>(),
+    success: boolean('success').notNull(),
+    errorMessage: text('error_message'),
+    errorTag: text('error_tag'),
+    durationMs: integer('duration_ms'),
+    costCents: integer('cost_cents'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    orgRecentIdx: index('tool_call_logs_org_recent_idx').on(t.orgId, t.createdAt),
+    leadIdx: index('tool_call_logs_lead_idx').on(t.leadId),
+    toolNameIdx: index('tool_call_logs_tool_name_idx').on(t.toolName, t.createdAt),
   }),
 )

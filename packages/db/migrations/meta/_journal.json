@@ -15,6 +15,13 @@
       "when": 1778538347030,
       "tag": "0001_outstanding_wolfpack",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1778982224327,
+      "tag": "0002_certain_vanisher",
+      "breakpoints": true
     }
   ]
 }

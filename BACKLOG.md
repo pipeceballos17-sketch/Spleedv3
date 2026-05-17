@@ -17,6 +17,7 @@
 - BACKLOG-004: Manual enrichment via URL en iMessage (Sprint 8)
 - BACKLOG-005: Personal website enrichment (Sprint 6)
 - BACKLOG-010: Tailwind v4 + Next 15 + Turbopack config check (Sprint 9)
+- BACKLOG-016: Tech debt cleanup — SDK type casts (Sprint 12 hardening)
 
 **PHASE 2 (sprints 13+):**
 - BACKLOG-003: Profile pictures en iMessage
@@ -317,6 +318,39 @@
 - `/apps/web/postcss.config.mjs`
 - `/apps/web/app/globals.css`
 - `/apps/web/next.config.ts`
+
+---
+
+## Sprint 12 — Hardening
+
+### BACKLOG-016: Tech debt cleanup — SDK type casts
+
+**Status:** Backlog (Sprint 12 hardening)
+**Priority:** LOW — fixes funcionan, son SDK lag temporal
+**Origin:** Sprint 3 typecheck fixes (2026-05-12)
+
+**Context:**
+3 TypeScript casts en `packages/agents` introducidos durante Sprint 3 por SDK type lag. Los casts son quirúrgicos y safe-at-runtime (zod validation arriba en el código), pero merecen revisión cuando los SDKs actualicen sus types para reflejar lo que ya soportan en runtime.
+
+**Files affected:**
+- `packages/agents/src/runtime/prompt-cache.ts` — local `CachedTextBlock` interface en vez de `Anthropic.Messages.TextBlockParam` (que no expone `cache_control` aún en SDK 0.30.1)
+- `packages/agents/src/runtime/index.ts` — cast del array `system` al boundary del SDK + cast de `response.usage` para acceder a `cache_read_input_tokens` / `cache_creation_input_tokens`
+- `packages/agents/src/workers/define.ts` — cast `as never` en `queue.add(name, validated, opts)` (BullMQ 5.76 `ExtractNameType` / `ExtractDataType` utility types confunden TypeScript a través de nuestro helper genérico `createQueue<T>`)
+
+**Mitigación actual:** zod validation antes de cada cast garantiza shape correcto en runtime. Memoria de proyecto `project_sdk_types_lag_casts.md` documenta cada site con detalle.
+
+**Revisión triggers:**
+1. `@anthropic-ai/sdk` actualiza más allá de 0.30.1 → verificar si `cache_control` está exposed en `TextBlockParam` y `cache_read_input_tokens` en `Usage`
+2. BullMQ actualiza → verificar si `ExtractDataType` inference mejoró
+3. Sprint 12 hardening review (esto)
+
+**Effort estimate:**
+- 1-2h investigation + cleanup cuando triggers ocurran
+- No urgente, no bloquea nada
+
+**Dónde verificar SDK types al revisar:**
+- `node_modules/.bun/@anthropic-ai+sdk@<version>/dist/resources/messages.d.ts`
+- `node_modules/.bun/bullmq@<version>/dist/esm/types/...`
 
 ---
 

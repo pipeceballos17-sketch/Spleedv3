@@ -153,6 +153,20 @@ CREATE POLICY lead_threads_member_insert ON public.lead_threads
 -- No UPDATE/DELETE policies on lead_threads — append-only audit log.
 -- GDPR scrub uses service role + hard delete + audit_logs entry.
 
+-- ---------------------------------------------------------------------
+-- tool_call_logs (Sprint 3) — every agent tool invocation
+-- Members SELECT their org's logs; service role INSERTs (no member writes).
+-- ---------------------------------------------------------------------
+ALTER TABLE public.tool_call_logs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tool_call_logs_member_select ON public.tool_call_logs;
+CREATE POLICY tool_call_logs_member_select ON public.tool_call_logs
+  FOR SELECT
+  USING (org_id = public.current_org_id() AND public.is_org_member(org_id));
+
+-- No INSERT/UPDATE/DELETE policies on tool_call_logs.
+-- Service role inserts via defineTool's audit wrapper; users never mutate.
+
 -- =====================================================================
 -- Enum documentation (informational, not enforced at DB level)
 -- =====================================================================

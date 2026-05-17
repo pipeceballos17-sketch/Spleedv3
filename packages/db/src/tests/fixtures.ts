@@ -7,6 +7,7 @@ import {
   leads,
   orgMembers,
   orgs,
+  toolCallLogs,
   users,
 } from '../schema'
 
@@ -151,6 +152,34 @@ export async function seedLeadFixtures(): Promise<void> {
       role: 'agent',
       agentKind: 'scout',
       content: 'Discovered Bob via Apollo.',
+    },
+  ])
+}
+
+/**
+ * Sprint 3 fixtures: one tool_call_log per org (proves RLS scoping for the new table).
+ * Call AFTER seedIsolationFixtures().
+ */
+export async function seedToolCallLogFixtures(): Promise<void> {
+  const db = getServiceClient()
+  await db.insert(toolCallLogs).values([
+    {
+      orgId: ORG_A_ID,
+      agentKind: 'scout',
+      toolName: 'hello_world',
+      inputJson: { message: 'fixture-a' },
+      outputJson: { echo: 'scout says: fixture-a' },
+      success: true,
+      durationMs: 12,
+    },
+    {
+      orgId: ORG_B_ID,
+      agentKind: 'scout',
+      toolName: 'hello_world',
+      inputJson: { message: 'fixture-b' },
+      outputJson: { echo: 'scout says: fixture-b' },
+      success: true,
+      durationMs: 15,
     },
   ])
 }

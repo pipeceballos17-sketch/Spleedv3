@@ -26,6 +26,7 @@ import {
   leads,
   orgIntegrations,
   orgs,
+  toolCallLogs,
 } from '../schema'
 import {
   ICP_A_ID,
@@ -147,6 +148,38 @@ describe('Vector 1 — RLS: audit_logs', () => {
     const { data } = await client.from('audit_logs').select('org_id, action')
     expect(data?.every((r: { org_id: string }) => r.org_id === ORG_A_ID)).toBe(true)
     expect(data?.length).toBeGreaterThan(0)
+  })
+})
+
+describe('Vector 1 — RLS: tool_call_logs (Sprint 3)', () => {
+  it('member of A sees only A tool call logs', async () => {
+    const db = getServiceClient()
+    await db.insert(toolCallLogs).values([
+      { orgId: ORG_A_ID, agentKind: 'scout', toolName: 'tcl_test', inputJson: {}, success: true },
+      { orgId: ORG_B_ID, agentKind: 'scout', toolName: 'tcl_test', inputJson: {}, success: true },
+    ])
+
+    const client = await clientAs(USER_A_AUTH_ID, ORG_A_ID)
+    const { data } = await client.from('tool_call_logs').select('org_id, tool_name')
+    expect(data?.every((r: { org_id: string }) => r.org_id === ORG_A_ID)).toBe(true)
+    expect(data?.length).toBeGreaterThan(0)
+  })
+
+  it('service role can INSERT (worker contract)', async () => {
+    const db = getServiceClient()
+    const [row] = await db
+      .insert(toolCallLogs)
+      .values({
+        orgId: ORG_A_ID,
+        agentKind: 'profiler',
+        toolName: 'service_role_insert_test',
+        inputJson: { foo: 'bar' },
+        success: true,
+        durationMs: 5,
+      })
+      .returning()
+    expect(row).toBeDefined()
+    expect(row?.toolName).toBe('service_role_insert_test')
   })
 })
 

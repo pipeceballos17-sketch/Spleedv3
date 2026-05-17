@@ -33,6 +33,7 @@ const RLS_FILES = [
   '03-access-token-hook.sql',
   '04-bootstrap.sql',
   '05-policies.sql',
+  '06-vault-helpers.sql',
 ]
 
 async function main() {

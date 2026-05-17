@@ -10,6 +10,10 @@
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
+  "dependencies": {
+    "@spleed/agents": "workspace:*",
+    "@spleed/db": "workspace:*"
+  },
   "devDependencies": {
     "@types/bun": "^1.1.0",
     "typescript": "^5.7.0"
