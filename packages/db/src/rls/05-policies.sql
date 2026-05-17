@@ -168,6 +168,67 @@ CREATE POLICY tool_call_logs_member_select ON public.tool_call_logs
 -- Service role inserts via defineTool's audit wrapper; users never mutate.
 
 -- =====================================================================
+-- Sprint 4 — outreach pipeline (assets, outreach_events, tracking_events)
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- assets — founder full CRUD on drafts and published assets.
+-- Soft-delete via UPDATE deleted_at (no hard DELETE in normal flow, but
+-- member DELETE policy is present for explicit purge by founder).
+-- ---------------------------------------------------------------------
+ALTER TABLE public.assets ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS assets_member_select ON public.assets;
+CREATE POLICY assets_member_select ON public.assets
+  FOR SELECT
+  USING (org_id = public.current_org_id() AND public.is_org_member(org_id));
+
+DROP POLICY IF EXISTS assets_member_insert ON public.assets;
+CREATE POLICY assets_member_insert ON public.assets
+  FOR INSERT
+  WITH CHECK (org_id = public.current_org_id() AND public.is_org_member(org_id));
+
+DROP POLICY IF EXISTS assets_member_update ON public.assets;
+CREATE POLICY assets_member_update ON public.assets
+  FOR UPDATE
+  USING (org_id = public.current_org_id() AND public.is_org_member(org_id))
+  WITH CHECK (org_id = public.current_org_id() AND public.is_org_member(org_id));
+
+DROP POLICY IF EXISTS assets_member_delete ON public.assets;
+CREATE POLICY assets_member_delete ON public.assets
+  FOR DELETE
+  USING (org_id = public.current_org_id() AND public.is_org_member(org_id));
+
+-- ---------------------------------------------------------------------
+-- outreach_events — state-on-row mutable, but immutable from member view.
+-- Member SELECT only. Service role performs INSERT (initial send) and
+-- UPDATE (webhook status transitions).
+-- ---------------------------------------------------------------------
+ALTER TABLE public.outreach_events ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS outreach_events_member_select ON public.outreach_events;
+CREATE POLICY outreach_events_member_select ON public.outreach_events
+  FOR SELECT
+  USING (org_id = public.current_org_id() AND public.is_org_member(org_id));
+
+-- No INSERT/UPDATE/DELETE policies on outreach_events.
+-- Workers + webhook handlers run as service role (bypasses RLS).
+
+-- ---------------------------------------------------------------------
+-- tracking_events — append-only pixel hit stream.
+-- Member SELECT only. Service role performs INSERT (ingest endpoint).
+-- ---------------------------------------------------------------------
+ALTER TABLE public.tracking_events ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tracking_events_member_select ON public.tracking_events;
+CREATE POLICY tracking_events_member_select ON public.tracking_events
+  FOR SELECT
+  USING (org_id = public.current_org_id() AND public.is_org_member(org_id));
+
+-- No INSERT/UPDATE/DELETE policies on tracking_events.
+-- Public microsite ingest endpoint (Sprint 7) runs as service role.
+
+-- =====================================================================
 -- Enum documentation (informational, not enforced at DB level)
 -- =====================================================================
 

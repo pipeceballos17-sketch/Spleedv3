@@ -7,6 +7,7 @@
 > **Versión 0.2:** Agregados items 004-009 (manual enrichment, personal website, screenshot enrichment, social scraping ético, voice rejection, meeting notes capture).
 > **Versión 0.3:** Agregado BACKLOG-010 (Tailwind v4 + Next 15 + Turbopack config check para Sprint 9).
 > **Versión 0.4:** Agregados items 011-014 — LinkedIn engagement capture (★ HIGH VALUE), pricing & Sendblue alternativas, Lite tier deferred, competitive positioning iMessage-native. Sprint 1 cierre — 2026-05-11.
+> **Versión 0.5:** Agregado BACKLOG-017 — Migrate large asset.content to Supabase Storage (Sprint 4 Decision E, target Sprint 12 hardening).
 
 ---
 
@@ -18,6 +19,7 @@
 - BACKLOG-005: Personal website enrichment (Sprint 6)
 - BACKLOG-010: Tailwind v4 + Next 15 + Turbopack config check (Sprint 9)
 - BACKLOG-016: Tech debt cleanup — SDK type casts (Sprint 12 hardening)
+- BACKLOG-017: Migrate large asset.content (>50KB) to Supabase Storage (Sprint 12 hardening)
 
 **PHASE 2 (sprints 13+):**
 - BACKLOG-003: Profile pictures en iMessage
@@ -351,6 +353,45 @@
 **Dónde verificar SDK types al revisar:**
 - `node_modules/.bun/@anthropic-ai+sdk@<version>/dist/resources/messages.d.ts`
 - `node_modules/.bun/bullmq@<version>/dist/esm/types/...`
+
+---
+
+### BACKLOG-017: Migrate large asset.content (>50KB) to Supabase Storage
+
+**Status:** Backlog (Sprint 12 hardening)
+**Priority:** LOW — observability + cost optimization, not correctness
+**Origin:** Sprint 4 Decision E (assets inline jsonb for MVP, 2026-05-17)
+
+**Context:**
+Sprint 4 stores Composer-generated `assets.content` inline as jsonb (Decision E).
+Microsites are ~5-20KB structured JSON — fine inline. But once Composer evolves
+to richer assets (audit PDFs with embedded screenshots, ROI calculators with
+large datasets, demo_video referencing transcript) some rows may exceed 50KB.
+Postgres toasts >2KB jsonb but query patterns still pay for it; CDN-fronted
+Supabase Storage scales better.
+
+**Qué hacer:**
+
+1. Add monitoring on `pg_column_size(content)` per row weekly.
+2. When ≥10 rows exceed 50KB, plan migration:
+   - Add `storage_path text NULL` column on assets.
+   - Move `content` body to Supabase Storage at `orgs/{org_id}/assets/{asset_id}.json`.
+   - Keep `content` jsonb as `{ kind, version, storagePath, summary }` for fast
+     filtering/listing without storage round-trip.
+3. Renderer reads `content.storagePath` and fetches the full body lazily.
+4. Migration is backwards-compatible: rows below threshold stay inline.
+
+**Triggers de revisión:**
+- Postgres TOAST warnings in logs
+- Renderer p95 latency > 200ms on lead detail page
+- Sprint 12 hardening review
+
+**Effort estimate:** 1-2 días — column add, ingestion helper, renderer fallback, backfill script (chunked).
+
+**Dónde modificar:**
+- `packages/db/src/schema/outreach.ts` — `assets.storagePath`
+- `packages/agents/composer/` — publish-asset tool (Sprint 7) writes Storage + DB
+- `apps/web/app/[slug]/page.tsx` — renderer reads Storage on demand
 
 ---
 

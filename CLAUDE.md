@@ -176,15 +176,43 @@ lead_threads (id, lead_id, org_id, agent_kind, role: agent|user|tool, content, m
 ### Sprint 4 (semana 4) — Outreach + tracking
 ```sql
 -- Generated assets (microsites, demos)
-assets (id, lead_id, org_id, kind: microsite|demo_video|audit_pdf, slug, content_jsonb, public_url, view_count)
+assets (id, lead_id, org_id, kind: microsite|demo_video|audit_pdf|roi_calculator|loom_script,
+        slug, content_jsonb, public_url, og_image_url, view_count, unique_viewer_count,
+        last_viewed_at, preferred_outreach_message, published_at, deleted_at)
 
--- Outreach messages sent
-outreach_events (id, lead_id, org_id, channel: email|linkedin|x|imessage,
-                 direction: outbound|inbound, content, status, sent_at, opened_at, replied_at)
+-- Outreach messages sent (state-on-row mutable; service-role-only INSERT/UPDATE)
+outreach_events (id, lead_id, org_id, asset_id, channel: email|linkedin|x|imessage,
+                 direction: outbound|inbound, subject, content, provider_message_id,
+                 status, sent_at, delivered_at, opened_at, replied_at, bounced_at,
+                 sequence_position)
 
--- Microsite tracking pixel events
-tracking_events (id, asset_id, lead_id, kind: page_view|cta_click|video_play, ip, ua, ts)
+-- Microsite tracking pixel events (NO raw IP — hashed fingerprint only)
+tracking_events (id, asset_id, lead_id, org_id, kind: page_view|cta_click|video_play|calendar_open|calendar_book,
+                 session_fingerprint, referrer, metadata_jsonb)
 ```
+
+**Sprint 4 invariants (must hold for any code writing to these tables):**
+
+1. **Atomic counter sync (tracking_events ↔ assets):** The ingest worker (Sprint 7)
+   MUST wrap `INSERT tracking_events` + `UPDATE assets` (view_count, unique_viewer_count,
+   last_viewed_at) in a single SQL transaction. Never two separate writes — desync
+   risk on partial failure.
+
+2. **No raw IP in tracking_events:** The ingest endpoint (Sprint 7) MUST hash
+   `sha256(asset.id || ':' || ip || ':' || user_agent)` into `session_fingerprint`
+   BEFORE insert. Raw IP must never appear in this table — not as a column, not
+   inside metadata jsonb. App-layer enforcement (no DB trigger).
+
+3. **Slug is permanently reserved:** `assets.slug` is globally unique and NEVER
+   reused — even after soft-delete. The `assets_slug_unique` index is NOT partial.
+   Composer (Sprint 7) appends a random suffix to prevent practical collisions
+   across leads/orgs.
+
+4. **outreach_events threading (deferred to Sprint 7):** Inbound/outbound thread
+   correlation is not modeled in Sprint 4. Options on the table: `parent_event_id`
+   self-reference, `provider_thread_id` from Resend/LinkedIn, or app-layer join
+   via `lead_id` + temporal order. Decision lands when we build the inbound reply
+   ingest in Sprint 7.
 
 ### Sprint 5 (semana 5) — Gifting + approvals
 ```sql

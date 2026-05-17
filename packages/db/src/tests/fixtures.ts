@@ -1,13 +1,16 @@
 import { sql } from 'drizzle-orm'
 import { getServiceClient } from '../client'
 import {
+  assets,
   icps,
   leadDossiers,
   leadThreads,
   leads,
   orgMembers,
   orgs,
+  outreachEvents,
   toolCallLogs,
+  trackingEvents,
   users,
 } from '../schema'
 
@@ -23,6 +26,14 @@ export const ICP_A_ID = '22222222-2222-2222-2222-22222222222a'
 export const ICP_B_ID = '22222222-2222-2222-2222-22222222222b'
 export const LEAD_A_ID = '33333333-3333-3333-3333-33333333333a'
 export const LEAD_B_ID = '33333333-3333-3333-3333-33333333333b'
+
+// Sprint 4 fixtures
+export const ASSET_A_ID = '44444444-4444-4444-4444-44444444444a'
+export const ASSET_B_ID = '44444444-4444-4444-4444-44444444444b'
+export const OUTREACH_A_ID = '55555555-5555-5555-5555-55555555555a'
+export const OUTREACH_B_ID = '55555555-5555-5555-5555-55555555555b'
+export const TRACKING_A_ID = '66666666-6666-6666-6666-66666666666a'
+export const TRACKING_B_ID = '66666666-6666-6666-6666-66666666666b'
 
 /**
  * Wipe all org/user data. CASCADE handles every dependent table including
@@ -152,6 +163,100 @@ export async function seedLeadFixtures(): Promise<void> {
       role: 'agent',
       agentKind: 'scout',
       content: 'Discovered Bob via Apollo.',
+    },
+  ])
+}
+
+/**
+ * Sprint 4 fixtures: one asset per org. Call AFTER seedLeadFixtures().
+ */
+export async function seedAssetFixtures(): Promise<void> {
+  const db = getServiceClient()
+  await db.insert(assets).values([
+    {
+      id: ASSET_A_ID,
+      orgId: ORG_A_ID,
+      leadId: LEAD_A_ID,
+      kind: 'microsite',
+      slug: 'alice-cto-fixture-a',
+      content: { version: '1', kind: 'microsite', hero: { h1: 'Fixture A', subhead: 'For testing' } },
+      publicUrl: 'https://lead.spleed.ai/alice-cto-fixture-a',
+      preferredOutreachMessage: 'fixture outreach a',
+    },
+    {
+      id: ASSET_B_ID,
+      orgId: ORG_B_ID,
+      leadId: LEAD_B_ID,
+      kind: 'microsite',
+      slug: 'bob-cfo-fixture-b',
+      content: { version: '1', kind: 'microsite', hero: { h1: 'Fixture B', subhead: 'For testing' } },
+      publicUrl: 'https://lead.spleed.ai/bob-cfo-fixture-b',
+      preferredOutreachMessage: 'fixture outreach b',
+    },
+  ])
+}
+
+/**
+ * Sprint 4 fixtures: one outbound outreach_event per org. Call AFTER seedAssetFixtures().
+ */
+export async function seedOutreachEventFixtures(): Promise<void> {
+  const db = getServiceClient()
+  await db.insert(outreachEvents).values([
+    {
+      id: OUTREACH_A_ID,
+      orgId: ORG_A_ID,
+      leadId: LEAD_A_ID,
+      assetId: ASSET_A_ID,
+      channel: 'email',
+      direction: 'outbound',
+      subject: 'Fixture outreach to Alice',
+      content: 'Hello Alice, this is a fixture outreach.',
+      providerMessageId: 'fixture-provider-a-1',
+      status: 'sent',
+      sequencePosition: 1,
+      sentAt: new Date(),
+    },
+    {
+      id: OUTREACH_B_ID,
+      orgId: ORG_B_ID,
+      leadId: LEAD_B_ID,
+      assetId: ASSET_B_ID,
+      channel: 'linkedin',
+      direction: 'outbound',
+      content: 'Hello Bob, this is a fixture outreach.',
+      providerMessageId: 'fixture-provider-b-1',
+      status: 'sent',
+      sequencePosition: 1,
+      sentAt: new Date(),
+    },
+  ])
+}
+
+/**
+ * Sprint 4 fixtures: one page_view tracking_event per org. Call AFTER seedAssetFixtures().
+ */
+export async function seedTrackingEventFixtures(): Promise<void> {
+  const db = getServiceClient()
+  await db.insert(trackingEvents).values([
+    {
+      id: TRACKING_A_ID,
+      orgId: ORG_A_ID,
+      assetId: ASSET_A_ID,
+      leadId: LEAD_A_ID,
+      kind: 'page_view',
+      sessionFingerprint: 'fixture-fingerprint-a-1',
+      referrer: 'https://mail.google.com',
+      metadata: { viewport: '1440x900' },
+    },
+    {
+      id: TRACKING_B_ID,
+      orgId: ORG_B_ID,
+      assetId: ASSET_B_ID,
+      leadId: LEAD_B_ID,
+      kind: 'page_view',
+      sessionFingerprint: 'fixture-fingerprint-b-1',
+      referrer: 'https://linkedin.com',
+      metadata: { viewport: '1920x1080' },
     },
   ])
 }

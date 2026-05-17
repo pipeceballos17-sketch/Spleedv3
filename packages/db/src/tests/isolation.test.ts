@@ -19,6 +19,7 @@ import { eq } from 'drizzle-orm'
 import { closeServiceClient, getServiceClient } from '../client'
 import { loadEnv } from '../env'
 import {
+  assets,
   auditLogs,
   icps,
   leadDossiers,
@@ -26,9 +27,13 @@ import {
   leads,
   orgIntegrations,
   orgs,
+  outreachEvents,
   toolCallLogs,
+  trackingEvents,
 } from '../schema'
 import {
+  ASSET_A_ID,
+  ASSET_B_ID,
   ICP_A_ID,
   ICP_B_ID,
   LEAD_A_ID,
@@ -38,8 +43,11 @@ import {
   USER_A_AUTH_ID,
   USER_B_AUTH_ID,
   resetTestData,
+  seedAssetFixtures,
   seedIsolationFixtures,
   seedLeadFixtures,
+  seedOutreachEventFixtures,
+  seedTrackingEventFixtures,
 } from './fixtures'
 import { createTestJWT } from './jwt'
 
@@ -62,6 +70,9 @@ async function clientAs(userAuthId: string, orgId: string): Promise<SupabaseClie
 beforeAll(async () => {
   await seedIsolationFixtures()
   await seedLeadFixtures()
+  await seedAssetFixtures()
+  await seedOutreachEventFixtures()
+  await seedTrackingEventFixtures()
 
   // Seed an org_integration in each org so we have something with a vault_secret_id
   // to test cross-tenant SELECT/INSERT.
@@ -280,6 +291,181 @@ describe('Vector 1 — RLS: lead_threads (append-only)', () => {
       .eq('id', threadId!)
       .select()
     expect(data).toEqual([])
+  })
+})
+
+// =====================================================================
+// Sprint 4: outreach pipeline (assets, outreach_events, tracking_events)
+// =====================================================================
+
+describe('Vector 1 — RLS: assets (Sprint 4)', () => {
+  it('member of A sees only A assets', async () => {
+    const client = await clientAs(USER_A_AUTH_ID, ORG_A_ID)
+    const { data } = await client.from('assets').select('id, org_id, slug')
+    expect(data?.length).toBe(1)
+    expect(data?.[0]?.org_id).toBe(ORG_A_ID)
+    expect(data?.[0]?.slug).toBe('alice-cto-fixture-a')
+  })
+
+  it('member of A INSERT to org A succeeds', async () => {
+    const client = await clientAs(USER_A_AUTH_ID, ORG_A_ID)
+    const { error, data } = await client
+      .from('assets')
+      .insert({
+        org_id: ORG_A_ID,
+        lead_id: LEAD_A_ID,
+        kind: 'microsite',
+        slug: 'rls-insert-test-a',
+        content: { version: '1', kind: 'microsite' },
+        public_url: 'https://lead.spleed.ai/rls-insert-test-a',
+      })
+      .select()
+    expect(error).toBeNull()
+    expect(data?.length).toBe(1)
+
+    // cleanup
+    const db = getServiceClient()
+    await db.delete(assets).where(eq(assets.slug, 'rls-insert-test-a'))
+  })
+
+  it('member of A INSERT to org B fails (RLS WITH CHECK)', async () => {
+    const client = await clientAs(USER_A_AUTH_ID, ORG_A_ID)
+    const { error } = await client.from('assets').insert({
+      org_id: ORG_B_ID,
+      lead_id: LEAD_B_ID,
+      kind: 'microsite',
+      slug: 'cross-tenant-injection-attempt',
+      content: { version: '1' },
+      public_url: 'https://lead.spleed.ai/cross-tenant-injection-attempt',
+    })
+    expect(error).not.toBeNull()
+  })
+
+  it("member of A UPDATE of org B's asset returns zero rows (RLS)", async () => {
+    const client = await clientAs(USER_A_AUTH_ID, ORG_A_ID)
+    const { data } = await client
+      .from('assets')
+      .update({ preferred_outreach_message: 'tampered' })
+      .eq('id', ASSET_B_ID)
+      .select()
+    expect(data).toEqual([])
+
+    // Verify asset B was NOT changed
+    const db = getServiceClient()
+    const [assetB] = await db.select().from(assets).where(eq(assets.id, ASSET_B_ID))
+    expect(assetB?.preferredOutreachMessage).toBe('fixture outreach b')
+  })
+})
+
+describe('Vector 1 — RLS: outreach_events (Sprint 4, append-only from member view)', () => {
+  it('member of A sees only A outreach events', async () => {
+    const client = await clientAs(USER_A_AUTH_ID, ORG_A_ID)
+    const { data } = await client.from('outreach_events').select('id, org_id, content')
+    expect(data?.length).toBe(1)
+    expect(data?.[0]?.org_id).toBe(ORG_A_ID)
+  })
+
+  it('member of A INSERT to outreach_events FAILS (no member INSERT policy)', async () => {
+    const client = await clientAs(USER_A_AUTH_ID, ORG_A_ID)
+    const { error } = await client.from('outreach_events').insert({
+      org_id: ORG_A_ID,
+      lead_id: LEAD_A_ID,
+      channel: 'email',
+      direction: 'outbound',
+      content: 'attempted member-side insert',
+    })
+    expect(error).not.toBeNull()
+  })
+
+  it('service role can INSERT + UPDATE outreach_events for any org (worker/webhook contract)', async () => {
+    const db = getServiceClient()
+    // INSERT (initial send by worker)
+    const [inserted] = await db
+      .insert(outreachEvents)
+      .values({
+        orgId: ORG_B_ID,
+        leadId: LEAD_B_ID,
+        channel: 'email',
+        direction: 'outbound',
+        content: 'service role insert test',
+        providerMessageId: 'svc-role-test-1',
+        sequencePosition: 2,
+      })
+      .returning()
+    expect(inserted).toBeDefined()
+
+    // UPDATE (webhook arrives: delivered)
+    const updateResult = await db
+      .update(outreachEvents)
+      .set({ status: 'delivered', deliveredAt: new Date() })
+      .where(eq(outreachEvents.id, inserted!.id))
+      .returning()
+    expect(updateResult.length).toBe(1)
+    expect(updateResult[0]?.status).toBe('delivered')
+
+    // cleanup
+    await db.delete(outreachEvents).where(eq(outreachEvents.id, inserted!.id))
+  })
+})
+
+describe('Vector 1 — RLS: tracking_events (Sprint 4, append-only)', () => {
+  it('member of A sees only A tracking events', async () => {
+    const client = await clientAs(USER_A_AUTH_ID, ORG_A_ID)
+    const { data } = await client.from('tracking_events').select('id, org_id, kind')
+    expect(data?.length).toBe(1)
+    expect(data?.[0]?.org_id).toBe(ORG_A_ID)
+  })
+
+  it('member of A INSERT to tracking_events FAILS (no member INSERT policy)', async () => {
+    const client = await clientAs(USER_A_AUTH_ID, ORG_A_ID)
+    const { error } = await client.from('tracking_events').insert({
+      org_id: ORG_A_ID,
+      asset_id: ASSET_A_ID,
+      lead_id: LEAD_A_ID,
+      kind: 'page_view',
+      session_fingerprint: 'attempted-member-insert',
+    })
+    expect(error).not.toBeNull()
+  })
+
+  it('service role can INSERT tracking_events (ingest endpoint contract)', async () => {
+    const db = getServiceClient()
+    const [row] = await db
+      .insert(trackingEvents)
+      .values({
+        orgId: ORG_A_ID,
+        assetId: ASSET_A_ID,
+        leadId: LEAD_A_ID,
+        kind: 'cta_click',
+        sessionFingerprint: 'svc-role-tracking-test',
+        metadata: { ctaId: 'book-meeting' },
+      })
+      .returning()
+    expect(row).toBeDefined()
+    expect(row?.kind).toBe('cta_click')
+
+    // cleanup
+    await db.delete(trackingEvents).where(eq(trackingEvents.id, row!.id))
+  })
+})
+
+describe('Vector 1 — assets slug global uniqueness (Sprint 4, Micro 1)', () => {
+  it('two orgs cannot both create asset with the same slug (global unique)', async () => {
+    const db = getServiceClient()
+    let errored = false
+    try {
+      await db.insert(assets).values({
+        orgId: ORG_B_ID,
+        leadId: LEAD_B_ID,
+        kind: 'microsite',
+        slug: 'alice-cto-fixture-a', // already used by ORG_A in fixtures
+        content: { version: '1' },
+        publicUrl: 'https://lead.spleed.ai/alice-cto-fixture-a',
+      })
+    } catch (_e) {
+      errored = true
+    }
+    expect(errored).toBe(true)
   })
 })
 

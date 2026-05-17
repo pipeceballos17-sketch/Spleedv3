@@ -54,3 +54,46 @@ export const leadThreadRoleEnum = pgEnum('lead_thread_role', [
   'tool',
   'system',
 ])
+
+// Sprint 4 — outreach pipeline
+
+export const assetKindEnum = pgEnum('asset_kind', [
+  'microsite',
+  'demo_video',
+  'audit_pdf',
+  'roi_calculator',
+  'loom_script',
+])
+
+export const outreachChannelEnum = pgEnum('outreach_channel', [
+  'email',
+  'linkedin',
+  'x',
+  'imessage',
+])
+
+export const outreachDirectionEnum = pgEnum('outreach_direction', [
+  'outbound',
+  'inbound',
+])
+
+// Outreach lifecycle. State-on-row pattern (Decision B): a single row mutates
+// through these states via provider webhook updates. Member RLS is SELECT-only;
+// service role performs all INSERTs and status UPDATEs.
+export const outreachStatusEnum = pgEnum('outreach_status', [
+  'queued',
+  'sent',
+  'delivered',
+  'opened',
+  'replied',
+  'bounced',
+  'failed',
+])
+
+export const trackingEventKindEnum = pgEnum('tracking_event_kind', [
+  'page_view',
+  'cta_click',
+  'video_play',
+  'calendar_open',
+  'calendar_book',
+])
