@@ -9,7 +9,15 @@
 **Producto:** Spleed
 **Categoría:** Agentic SaaS — GTM agent para founder-led sales
 **Tagline interno:** "Your AI growth co-founder. Enriches leads cross-channel, books meetings, sends gifts, all with you in the loop."
-**ICP:** Early-stage founders (pre-seed con tracción, seed early) US-based, generando $10K+ MRR, sin budget para SDR, haciendo founder-led sales
+**ICP v2 (refined 2026-05-18):**
+Founders B2B doing founder-led sales, team 1-15 personas, en industrias con customer universe identificable y sales motion sofisticado. Common pains: reaching decision makers + personalization at scale.
+
+NOT limited to SaaS founders. Includes traditional B2B industries (educación, fintech traditional, healthcare, manufacturing, etc.) where founder doing manual outreach without SDR budget.
+
+**ICP v1 (deprecated 2026-05-18):**
+"Founders SaaS pre-seed/seed con $10K+ MRR, founder-led sales sin SDR."
+
+**Justification:** Validated by design partners Sebastián (Grupo500, educación B2B) and Zolvo (fintech B2B). Both fit B2B founder-led sales pattern, neither is SaaS. Pattern suggests Spleed is horizontal B2B, not SaaS-vertical.
 **Estado:** Greenfield. No hay código previo. Se construye desde cero con Claude Code.
 **Owner:** Solo founder técnico (Felipe). Nivel de seniority de ingeniería: intermedio. Prefiere explicaciones tied al problema, sin analogías genéricas. Output limpio y copy-paste ready.
 
@@ -19,6 +27,30 @@
 - Nunca asumas conocimiento de patterns avanzados (event sourcing, CQRS, etc.) sin explicarlos primero
 - Output de código siempre con comentarios en secciones críticas, no en cada línea
 - Si una decisión depende de info que no tienes, pregunta antes de inventar
+
+---
+
+## Product Strategy Phases
+
+Phase 1 (Sprints 1-12, current): MVP for founder-led sales B2B horizontal. Focus single founder or small team 1-5 personas. Core flow: discover/ingest → enrich → outreach → convert.
+
+Phase 2 (Sprints 13-24, post-PMF): Expand to early-stage teams (Series A, 3-15 personas). Adds multi-recipient notifications, team visibility features, deeper analytics. Validates social ring routing research (BACKLOG-023).
+
+Phase 3 (Sprints 24+, post-Series A funding): Enterprise edition for sales orgs Series B+ (SSO, SOC 2, custom integrations Salesforce/HubSpot, dedicated success). Separate product line, separate pricing.
+
+Architecture decisions Sprint 1-4 already support Phase 2-3 extensibility: multi-tenant RLS, org_members roles, audit_logs, agent_templates, integrations layer with Vault.
+
+---
+
+## Strategic Vision — Social Ring Routing (Phase 2-3 potencial)
+
+Beyond direct outreach to decision makers, Spleed potential moat: agents that map social graphs and route outreach via "closest path to decision maker" — peers, alumni, ex-colleagues, family members of decision makers.
+
+Critical for ICPs where decision maker has low digital footprint (factoring, family offices, traditional industries, certain B2B niches). Example: Zolvo (factoring lenders) — decision makers low digital footprint, but their family/young executives in their network have LinkedIn.
+
+Differentiator vs Monaco (humans-as-network) and Apollo/Outreach (direct outreach only).
+
+Validation needed Sprint 14-15 with design partners before commit to build (BACKLOG-023).
 
 ---
 

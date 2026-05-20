@@ -984,6 +984,251 @@ Bidirectional sync con tools que el founder ya usa:
 
 ---
 
+## Sprint 7-8 — Acceleration items
+
+### BACKLOG-018: Lead ingest manual (CSV/Excel/Apollo export)
+
+**Status:** Backlog, accelerated Sprint 7-8 (was Sprint 13-14)
+**Priority:** ⭐ HIGH — expands product surface significantly + required by design partner Grupo500
+**Origin:** Founder ideation 2026-05-17, refined by Sebastián (Grupo500) use case 2026-05-18
+
+**Context:**
+Founders pueden cargar listas propias de leads (de eventos, network, exports CRMs viejos, base de datos existente). Spleed las enriquece + las mete al pipeline. Acelerado de Sprint 13-14 a Sprint 7-8 por design partner Grupo500 (10K colegios en base de datos propia).
+
+**Scope MVP:**
+- CSV/Excel upload via dashboard
+- Column mapping (email, name, company, etc.)
+- Dedup logic (existing slug + email + linkedin)
+- Bulk enrichment via Profiler
+- Preview/confirmation antes de procesar
+- Error handling (rows mal formados)
+
+**Why Sprint 7-8 (not Sprint 6):**
+- Profiler primero valida que enrichment funciona
+- Sebastián no necesita producto en 60 días, concierge mientras tanto
+- Sprint 7-8 alinea con Composer ready (end-to-end coherente)
+
+**Effort estimate:** ~1.5 sprints
+
+---
+
+## Sprint 9-10 — Dashboard MVP shell
+
+### BACKLOG-019: Dashboard MVP shell — acelerado a Sprint 9-10
+
+**Status:** Roadmap update — from "Sprint 9-12 nice-to-have" to "Sprint 9-10 must-have"
+**Priority:** ⭐ HIGH
+**Origin:** Founder feedback 2026-05-17 — "leads no deben desaparecer en el chat, deben tener home visible"
+
+**Scope:**
+Sprint 9: Auth UI (Supabase magic link) + kanban view leads + lead detail view (dossier + outreach history + tracking timeline) + basic navigation
+
+Sprint 10: ICP setup form CRUD + integrations setup (Apollo, Apify, Sendblue OAuth) + onboarding flow + empty/loading states
+
+Sprint 11-12 (was 9-12 vague): Dashboard polish + analytics + settings + team management
+
+**Refined value prop:**
+"Spleed lives in your iMessage for moments that matter. Your leads + pipeline live in your dashboard for when you need depth."
+
+iMessage = primary interaction channel.
+Dashboard = setup + visibility + reference.
+
+---
+
+## Sprint 11-12 — Phase 1 expanded features
+
+### BACKLOG-022: Multi-recipient notifications (cofounder/team)
+
+**Status:** Sprint 11-12 (within Phase 1 expanded para teams chicos 2-5 personas)
+**Priority:** MEDIUM
+**Origin:** Founder refinement 2026-05-18 — ICP v2 includes team size 1-15
+
+**Scope:** Cuando founder org tiene 2+ members con roles owner/admin, decisions críticas se broadcastean a todos. Multi-recipient iMessage (todos members con Sendblue line) + dashboard notifications.
+
+**Critical decisions to make Sprint 11:**
+- Routing: ¿quién aprueba si owner y admin son distintos?
+- Conflict resolution: ¿qué si owner aprueba y admin rechaza?
+- Notification frequency: ¿all decisions or only critical?
+
+**Effort estimate:** ~1 sprint (notification routing + multi-tenant permissions extension)
+
+---
+
+## Sprint 14-15 — Strategic validation research
+
+### BACKLOG-023: Social ring routing — research spike
+
+**Status:** Backlog research/validation (Sprint 14-15)
+**Priority:** Strategic vision — high if validates, no commit yet
+**Origin:** Founder strategic insight 2026-05-17 (Zolvo factoring lenders example)
+
+**Hypothesis:** For ICPs where decision maker has low digital footprint, agents that route outreach via "closest person in network" (family, alumni, ex-colleagues, peers) deliver higher conversion than direct outreach.
+
+**Research spike scope:**
+- Interview 5-10 founders (mix of design partners + cold)
+- Questions: ¿How many decision makers in your ICP have low digital footprint? Do you value warm intro via network vs cold outreach? Would you be comfortable with agents reaching out to your network proxies?
+- Validate ethics/TOS implications (LinkedIn aggressive graph mapping)
+- Deliverable: decision document — proceed/defer/abandon
+
+**Effort:** ~1 week research + interviews
+
+**If validates → Sprint 18-24** implementación as Phase 2 feature (Level 3 differentiator vs Monaco/Apollo).
+
+---
+
+## Sprint 18+ — Contingent on validation
+
+### BACKLOG-020: Slack integration — team visibility
+
+**Status:** Deferred (post-MVP, Sprint 18+ contingent on validation)
+**Priority:** Low until validation
+**Origin:** Founder ideation 2026-05-17, refined 2026-05-18 with ICP v2 (team size 1-15)
+
+**Scope:** Postear updates de leads importantes a #sales channel designated. Útil para founders con cofounders/team chico que necesitan team coordination.
+
+**Trigger conditions (ALL must be met before building):**
+- 30+ founders en Spleed activos
+- >50% de esos founders tienen 2+ team members en su org
+- Survey muestra que founders piden Slack team visibility (no hipotético)
+
+**Alternative considered:** Multi-recipient iMessage (BACKLOG-022). Validar primero antes de Slack.
+
+**Effort estimate:** ~3 weeks (Slack OAuth + webhook + channel routing + permissions)
+
+---
+
+### BACKLOG-021: Kimi WebBridge browser tool evaluation
+
+**Status:** Deferred (Sprint 18+ or never)
+**Priority:** Low — research only
+**Origin:** Founder ideation 2026-05-17 (Kimi WebBridge lanzado 4 días antes)
+
+**Context:** Moonshot AI lanzó Kimi WebBridge, browser extension local-first via Chrome DevTools Protocol. Alternativa potencial al agent-browser de Vercel (decidido Sprint 6).
+
+**Analysis:** Kimi WebBridge NOT fit para Spleed actual:
+- Too new (4 días lanzado, maturity unknown)
+- Client-side architecture (Spleed necesita server-side multi-tenant)
+- Model lock-in con Kimi K2 (Spleed usa Anthropic Teams)
+- Local-first vs SaaS multi-tenant fundamentalmente distinto
+
+**Re-evaluation triggers:**
+- agent-browser Vercel se vuelve restrictive
+- Anthropic costs balloon (Kimi K2 más barato)
+- Spleed adds Chrome extension feature para founders
+
+**Action:** NO adoption en current roadmap.
+
+---
+
+## Concierge service & design partners (active now)
+
+### BACKLOG-024: Concierge service offering
+
+**Status:** Process documentation (active now for design partners)
+**Priority:** ⭐ HIGH — revenue + validation mechanism while building
+**Origin:** Strategic decision 2026-05-18, capacity validated 2026-05-19 via realistic cost analysis
+
+**Context:**
+Mientras Spleed producto se construye (Sprints 5-12), ofrecer "concierge service" donde Felipe + Claude API hace manualmente para design partners lo que el producto va a automatizar.
+
+**Pricing structure:**
+- $2,000/mes durante 3 meses (concierge phase)
+- Migration a producto cuando ready: $1,500/mes (vs $497 pricing público) por ser design partner
+- 12 meses guaranteed at $1,500
+- 6 meses producto bonus al final
+
+**Scope concierge:**
+- Manual lead enrichment (Felipe + Claude API)
+- Personalized email outreach (Felipe writes, Claude assists)
+- Meeting scheduling via Calendly direct
+- Reporting weekly (meetings agendadas, conversion rates)
+
+**Capacity limit (REVISED 2026-05-19):**
+Max 1-2 concierge customers simultaneous, NOT 3 as originally estimated. Realistic time analysis showed ~30-42 hrs/mes per concierge customer. With 3+ customers, building product becomes impossible. Felipe must default to 1 concierge customer focused plus light engagement con resto de design partners.
+
+**Cost economics validated:**
+- Variable cost per customer: ~$80-110/mes (Claude API + Apify + Apollo) with prompt caching enabled
+- Fixed infra base: $400-1,300/mes (Supabase + Vercel + Railway + Sendblue + Resend + warmup tools)
+- Gross profit per concierge customer at $2K: ~$1,590/mes
+- Effective rate per Felipe hour: ~$53/hr (rentable financially, sub-optimal estratégicamente vs building product)
+
+**Pipeline tracking en este BACKLOG:**
+- BACKLOG-025: Sebastián / Grupo500 (confirmed)
+- BACKLOG-026: Zolvo (prospective, Phase 2 contingent)
+- Other prospects (30X, CTW, Bodytech) tracked in local document Spleed_DesignPartners_Tracking.pdf (not git, Felipe-only)
+
+---
+
+### BACKLOG-025: Design partner #1 — Sebastián / Grupo500
+
+**Status:** Confirmed design partner, concierge phase 1 negotiation pending
+**Priority:** ⭐ HIGH
+**Origin:** Lead validation 2026-05-18
+
+**Context:**
+Sebastián, dueño de Grupo500. Vende cursos preICFES a colegios Colombia. Base 10K colegios, outreach manual actual, problema llegando a decision makers (secretarias responden, no rectores).
+
+**ICP fit:**
+- Founder doing founder-led sales ✓
+- Team size small ✓
+- B2B with sophisticated sales motion ✓
+- Lead universe identifiable (10K colegios) ✓
+- Industry: educación (NOT SaaS, but matches ICP v2 horizontal) ✓
+
+**Proposed offering:** Concierge $2K/mes × 3 meses + migration to product
+
+**Tracking learnings:**
+- What works in educational B2B vs SaaS
+- ICFES data integration patterns (vertical-specific avoid for product, customer provides data)
+- Decision maker access via personalization (validates Spleed core thesis)
+- Conversion rates from concierge work
+
+**Next steps:**
+- 30-min discovery call to formalize partnership
+- Pitch $2K/mes concierge structure
+- If accepted: start concierge work immediately, parallel to Sprint 5+ product work
+
+---
+
+### BACKLOG-026: Design partner #2 prospective — Zolvo
+
+**Status:** Prospective, Phase 2 dependent
+**Priority:** MEDIUM (warm lead, timing-dependent)
+**Origin:** Lead conversation 2026-05-17
+
+**Context:**
+Zolvo (zolvo.com) — Backoffice software para factoring lenders. Dispuesto a "grow with me" as design partner. Use case heavily dependent on social ring routing (decision makers low digital footprint en factoring industry).
+
+**ICP fit:**
+- Founder doing founder-led sales (likely) ✓
+- B2B with sophisticated sales motion ✓
+- Industry: fintech traditional (NOT SaaS, matches ICP v2 horizontal) ✓
+- Lead universe: limited TAM but identifiable ✓
+- KEY PAIN: requires social ring routing (Phase 2 feature)
+
+**Two options to present:**
+
+Option A: Wait for Phase 2 (Sprint 14+)
+- Spleed builds social ring routing post-validation (BACKLOG-023)
+- Zolvo is first customer when ready
+- 6+ months wait time
+
+Option B: Onboard Phase 1 with direct outreach (no social ring yet)
+- $1,500/mes from day 1
+- Workable but less optimal for their case
+- Migration to social ring routing automatic when feature ships
+
+**Mariana (GTM) validation 2026-05-19:**
+Confirmed patterns matching Spleed thesis: cold outreach mostly "opened sin respuesta", LinkedIn connect-first pattern works, sales cycle 2-3 months, TTV pilot 1 month, no structured follow-ups. Information valuable independent of partnership outcome.
+
+**Next steps:**
+- Honest conversation to determine Zolvo timing flexibility
+- Pitch both options, let them choose
+- If Option A: track interest, re-engage Sprint 14
+- If Option B: onboard now as design partner #2
+
+---
+
 ## Cómo se mantiene este archivo
 
 - Cuando una decisión de producto se difiere conscientemente, se agrega aquí
