@@ -1476,6 +1476,86 @@ Microsite, gifting, sequences — todo amplifica. Pero si primer mensaje no conv
 
 ---
 
+### BACKLOG-033: Composio integration layer — research spike
+
+**Status:** Research Sprint 6, decisión Sprint 7
+**Priority:** ⭐ HIGH — affects integration architecture
+**Origin:** Felipe Salinas / Houston.ai observation 2026-05-19 (Houston usa Composio para 100+ integrations en producción)
+
+**Context:**
+Composio (composio.dev) es servicio que centraliza OAuth + integrations management. Una API, 250+ tools (Apollo, Slack, Google Workspace, LinkedIn, Notion, HubSpot, etc). Pattern usado por Houston.ai y otros agent platforms para acelerar desarrollo de integraciones.
+
+**Hypothesis:**
+Para Sprint 7+ (Outreach Operator + integrations Phase 2), Composio puede acelerar significativamente:
+- OAuth flows managed (no construir 5-10 OAuth flows individuales)
+- Token refresh automatic per integration
+- Rate limiting handled por Composio
+- New integrations en horas vs semanas
+
+**Trade-offs to evaluate:**
+
+Pros:
+- Velocidad: 1 día setup vs 1-2 semanas per integration
+- Maintenance: actualizaciones de APIs managed by Composio
+- OAuth complexity hidden
+- New integrations enable revenue features rápido
+- Validación del pattern por Houston en producción
+
+Cons:
+- Vendor lock-in (si Composio sube precios o pivot)
+- Pricing escala con uso (per execution o per user)
+- Custom integrations (browser agent, Sendblue, Stripe Issuing) probablemente NO en Composio
+- Si Composio cae, integraciones Spleed caen
+- Latencia extra (1 hop adicional vs direct API)
+- Confiar architecture core en third-party startup
+
+**Research questions (Sprint 6):**
+- ¿Cuáles integraciones SÍ están en Composio? Verificar específico:
+  - Slack ✅ (probable)
+  - Apollo ? (verificar)
+  - Apify ? (probablemente NO, custom)
+  - Google Workspace ✅ (probable)
+  - LinkedIn ? (TOS issues)
+  - Stripe Issuing ? (probablemente NO)
+  - HubSpot ✅ (probable)
+  - Notion ✅ (probable)
+- ¿Pricing real para Spleed scale (50-500 customers)?
+- ¿SLAs y reliability track record?
+- ¿BYOK del LLM (BACKLOG-027) funciona compatible con Composio?
+- ¿Cuáles features de Spleed REQUIEREN custom integration?
+  - browser agent (Vercel agent-browser): custom obligatorio
+  - Hermes feedback loop: custom (data privacy)
+  - Sendblue iMessage / Slack approval flow: custom probable
+
+**Decision criteria Sprint 7:**
+- Si Composio cubre 70%+ de integraciones standard needed → use Composio
+- Si cubre <50% → maintain custom integrations layer
+- Si cubre 50-70% → híbrido (Composio para easy/standard, custom para hard/strategic)
+
+**Implementation if adopted:**
+- Setup Composio SDK en agent runtime (Sprint 3 infrastructure preserved, add Composio as new layer)
+- Wrap Composio calls en Spleed's tools abstraction
+- Vault per-tenant stores Composio tokens
+- Migration path documentado si necesitamos sacar Composio en futuro
+
+**Dependencies:**
+- Sprint 5-6 completos (tools layer existe)
+- Pricing negotiation con Composio (si scale lo justifica)
+- Conversation directa con Felipe Salinas sobre su experiencia operacional (rates, downtime, gotchas)
+
+**Validation conversation con Salinas:**
+- ¿Composio handles 100% de Houston integrations o tienen custom?
+- ¿Pricing real que pagan? ¿Vale la pena vs custom?
+- ¿Cuántos downtime incidents últimos 6 meses?
+- ¿Token refresh fiable o problemas frequentes?
+- ¿Si volvieran a empezar, irían con Composio again?
+
+**Effort estimate:**
+- Research Sprint 6: ~2-3 días
+- Implementation Sprint 7 si adopted: ~3-5 días (vs ~2-3 semanas para integrations custom equivalentes)
+
+---
+
 ## Cómo se mantiene este archivo
 
 - Cuando una decisión de producto se difiere conscientemente, se agrega aquí
