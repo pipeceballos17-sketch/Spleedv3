@@ -12,7 +12,9 @@
   },
   "dependencies": {
     "@spleed/agents": "workspace:*",
-    "@spleed/db": "workspace:*"
+    "@spleed/db": "workspace:*",
+    "drizzle-orm": "^0.36.0",
+    "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/bun": "^1.1.0",

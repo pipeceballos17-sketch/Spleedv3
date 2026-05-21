@@ -11,6 +11,7 @@ import {
 } from 'drizzle-orm/pg-core'
 import { sql } from 'drizzle-orm'
 import { orgs } from './tenant'
+import { scoutRuns } from './scout'
 import { leadStatusEnum, leadThreadRoleEnum } from './enums'
 
 /**
@@ -46,6 +47,9 @@ export const icps = pgTable(
       companySizeMin?: number
       companySizeMax?: number
       geos?: string[]
+      // Sprint 5a — seniorities consumed by Scout's SQL fit_score and
+      // parseICPToApolloFilters. TS-only addition (jsonb evolves freely).
+      seniorities?: string[]
       fundingStages?: string[]
       techStack?: string[]
       buyingSignals?: string[]
@@ -120,6 +124,12 @@ export const leads = pgTable(
 
     // Discovery metadata (Scout)
     foundVia: text('found_via').notNull(),
+    // FK to scout_runs — populated when lead originated from a Scout run.
+    // ON DELETE SET NULL so soft-deleting a run doesn't cascade-delete leads.
+    // Manual ingest (BACKLOG-018) and other founder-added leads leave this NULL.
+    // Circular import (scout.ts imports icps from this file) is fine —
+    // drizzle's references callback is lazy and only invoked at schema graph build time.
+    runId: uuid('run_id').references(() => scoutRuns.id, { onDelete: 'set null' }),
     fitScore: real('fit_score').default(0),
     fitReasoning: text('fit_reasoning'),
     // Tracks when fit_score was last computed. Sprint 5+ uses this to detect

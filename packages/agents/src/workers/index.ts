@@ -1,12 +1,13 @@
 import type { Worker } from 'bullmq'
 import { closeRedisConnection } from './queue'
 import { helloWorldWorker } from './hello-world.worker'
+import { scoutWorker } from './scout.worker'
 
 /**
  * Registry of all workers started by `startAllWorkers()`. Sprint 5+ appends
  * scout/profiler/composer/outreach/gifter/concierge workers here.
  */
-export const ALL_WORKERS = [helloWorldWorker] as const
+export const ALL_WORKERS = [helloWorldWorker, scoutWorker] as const
 
 export interface RunningWorkers {
   readonly count: number
@@ -34,3 +35,4 @@ export { defineWorker, type DefineWorkerInput, type DefinedWorker, type WorkerRe
 export { createScopedDb, type ScopedDb, type WorkerContext } from './context'
 export { getRedisConnection, closeRedisConnection, createQueue } from './queue'
 export { helloWorldWorker, type HelloWorldJob, type HelloWorldResult } from './hello-world.worker'
+export { scoutWorker, processScoutJob, type ScoutJob, type ScoutResult } from './scout.worker'

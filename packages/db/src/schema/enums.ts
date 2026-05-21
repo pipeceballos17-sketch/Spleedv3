@@ -28,6 +28,7 @@ export const agentKindEnum = pgEnum('agent_kind', [
   'outreach',
   'gifter',
   'concierge',
+  'hermes',
 ])
 
 export const verbosityEnum = pgEnum('verbosity', ['terse', 'normal', 'detailed'])
@@ -96,4 +97,30 @@ export const trackingEventKindEnum = pgEnum('tracking_event_kind', [
   'video_play',
   'calendar_open',
   'calendar_book',
+])
+
+// Sprint 5 — Scout runs + cost tracking
+
+export const scoutRunStatusEnum = pgEnum('scout_run_status', [
+  'queued',
+  'running',
+  'completed',
+  'failed',
+  'partial',
+])
+
+export const scoutTriggerTypeEnum = pgEnum('scout_trigger_type', [
+  'cron',
+  'on_demand',
+  'manual_test',
+])
+
+export const costProviderEnum = pgEnum('cost_provider', [
+  'apollo',
+  'apify',
+  'anthropic',
+  'openai',
+  'sendblue',
+  'slack',
+  'resend',
 ])

@@ -1,14 +1,201 @@
+import { and, eq } from 'drizzle-orm'
+import { z } from 'zod'
+import { getServiceClient, icps as icpsTable, scoutRuns } from '@spleed/db'
+import { scoutWorker } from '@spleed/agents/workers'
 import { startWorkers } from './workers/start'
 
 const port = Number(process.env.API_PORT ?? 3001)
 
+// ─── Auth stub (Sprint 5a) ────────────────────────────────────────────
+// TODO Sprint 9: replace x-org-id header stub with proper JWT auth via
+// Supabase Auth. The header is trivially spoofable today — accepted only
+// because Sprint 5a clients are dev/test only (no public exposure yet).
+const ORG_ID_HEADER = 'x-org-id'
+
+function getOrgId(req: Request): { orgId: string } | { error: Response } {
+  const raw = req.headers.get(ORG_ID_HEADER)
+  if (!raw) {
+    return {
+      error: Response.json(
+        { error: 'MISSING_ORG_ID', message: `Header ${ORG_ID_HEADER} is required` },
+        { status: 401 },
+      ),
+    }
+  }
+  // Permissive UUID v4 check — Sprint 9 JWT decode will replace this.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
+    return {
+      error: Response.json(
+        { error: 'INVALID_ORG_ID', message: 'Header value must be a UUID' },
+        { status: 401 },
+      ),
+    }
+  }
+  return { orgId: raw }
+}
+
+// ─── Route handlers ───────────────────────────────────────────────────
+
+const ScoutRunBodySchema = z.object({
+  icpId: z.string().uuid(),
+  volume: z.number().int().positive().max(200).default(50),
+})
+
+/**
+ * POST /api/scout/run — enqueue a Scout run for an ICP.
+ * Returns 200 { runId, status: 'queued' } immediately (async execution).
+ */
+async function postScoutRun(req: Request): Promise<Response> {
+  const auth = getOrgId(req)
+  if ('error' in auth) return auth.error
+
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return Response.json(
+      { error: 'INVALID_JSON', message: 'Request body must be valid JSON' },
+      { status: 400 },
+    )
+  }
+  const parsed = ScoutRunBodySchema.safeParse(body)
+  if (!parsed.success) {
+    return Response.json(
+      { error: 'INVALID_BODY', issues: parsed.error.issues },
+      { status: 400 },
+    )
+  }
+
+  const { icpId, volume } = parsed.data
+  const db = getServiceClient()
+
+  // Verify ICP exists AND belongs to the requesting org. Combined check —
+  // either condition failing returns 404 (don't leak ICP existence to
+  // adjacent orgs).
+  const icpRows = await db
+    .select({ id: icpsTable.id })
+    .from(icpsTable)
+    .where(and(eq(icpsTable.id, icpId), eq(icpsTable.orgId, auth.orgId)))
+  if (icpRows.length === 0) {
+    return Response.json(
+      { error: 'ICP_NOT_FOUND', message: `ICP ${icpId} not found for this org` },
+      { status: 404 },
+    )
+  }
+
+  // Create the scout_runs row first (status='queued'), then enqueue the job.
+  const [run] = await db
+    .insert(scoutRuns)
+    .values({
+      orgId: auth.orgId,
+      icpId,
+      status: 'queued',
+      triggerType: 'on_demand',
+      requestedVolume: volume,
+    })
+    .returning({ id: scoutRuns.id })
+
+  if (!run) {
+    return Response.json(
+      { error: 'INSERT_FAILED', message: 'Failed to create scout_runs row' },
+      { status: 500 },
+    )
+  }
+
+  await scoutWorker.enqueue({
+    runId: run.id,
+    orgId: auth.orgId,
+    icpId,
+    requestedVolume: volume,
+    triggerType: 'on_demand',
+  })
+
+  return Response.json({ runId: run.id, status: 'queued' }, { status: 200 })
+}
+
+/**
+ * GET /api/scout/runs/:runId — read the current state of a scout run.
+ * 404 if the run doesn't exist OR belongs to a different org (don't leak).
+ */
+async function getScoutRun(req: Request, runId: string): Promise<Response> {
+  const auth = getOrgId(req)
+  if ('error' in auth) return auth.error
+
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId)) {
+    return Response.json(
+      { error: 'INVALID_RUN_ID', message: 'runId must be a UUID' },
+      { status: 400 },
+    )
+  }
+
+  const db = getServiceClient()
+  const rows = await db
+    .select()
+    .from(scoutRuns)
+    .where(and(eq(scoutRuns.id, runId), eq(scoutRuns.orgId, auth.orgId)))
+
+  const run = rows[0]
+  if (!run) {
+    return Response.json(
+      { error: 'RUN_NOT_FOUND', message: `scout_run ${runId} not found for this org` },
+      { status: 404 },
+    )
+  }
+
+  return Response.json(
+    {
+      id: run.id,
+      status: run.status,
+      requestedVolume: run.requestedVolume,
+      apolloCandidatesFound: run.apolloCandidatesFound,
+      sqlFilteredCount: run.sqlFilteredCount,
+      leadsInsertedCount: run.leadsInsertedCount,
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+      errorSummary: run.errorSummary,
+    },
+    { status: 200 },
+  )
+}
+
+// ─── Bun.serve dispatch ───────────────────────────────────────────────
+
+const SCOUT_RUN_GET_RE = /^\/api\/scout\/runs\/([^/]+)$/
+
 const server = Bun.serve({
   port,
-  fetch(req) {
+  async fetch(req) {
     const url = new URL(req.url)
 
     if (url.pathname === '/health') {
       return Response.json({ ok: true, service: 'spleed-api' })
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/scout/run') {
+      try {
+        return await postScoutRun(req)
+      } catch (err) {
+        console.error('[POST /api/scout/run] internal error', err)
+        return Response.json(
+          { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
+          { status: 500 },
+        )
+      }
+    }
+
+    if (req.method === 'GET') {
+      const m = url.pathname.match(SCOUT_RUN_GET_RE)
+      if (m) {
+        try {
+          return await getScoutRun(req, m[1]!)
+        } catch (err) {
+          console.error('[GET /api/scout/runs/:runId] internal error', err)
+          return Response.json(
+            { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
+            { status: 500 },
+          )
+        }
+      }
     }
 
     return new Response('Spleed API', { status: 200 })

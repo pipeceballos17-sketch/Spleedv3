@@ -229,6 +229,38 @@ CREATE POLICY tracking_events_member_select ON public.tracking_events
 -- Public microsite ingest endpoint (Sprint 7) runs as service role.
 
 -- =====================================================================
+-- Sprint 5 — Scout runs + cost events ledger
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- scout_runs — one row per Scout execution. Member SELECT only;
+-- service role (worker) performs INSERT (queue) and UPDATE (status transitions).
+-- ---------------------------------------------------------------------
+ALTER TABLE public.scout_runs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS scout_runs_member_select ON public.scout_runs;
+CREATE POLICY scout_runs_member_select ON public.scout_runs
+  FOR SELECT
+  USING (org_id = public.current_org_id() AND public.is_org_member(org_id));
+
+-- No INSERT/UPDATE/DELETE policies on scout_runs.
+-- Worker (service role) creates runs and transitions status; members observe only.
+
+-- ---------------------------------------------------------------------
+-- cost_events — append-only ledger. Member SELECT only;
+-- service role (workers across all agents) INSERTs.
+-- ---------------------------------------------------------------------
+ALTER TABLE public.cost_events ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS cost_events_member_select ON public.cost_events;
+CREATE POLICY cost_events_member_select ON public.cost_events
+  FOR SELECT
+  USING (org_id = public.current_org_id() AND public.is_org_member(org_id));
+
+-- No INSERT/UPDATE/DELETE policies on cost_events.
+-- Workers insert as service role; users never mutate cost history.
+
+-- =====================================================================
 -- Enum documentation (informational, not enforced at DB level)
 -- =====================================================================
 
