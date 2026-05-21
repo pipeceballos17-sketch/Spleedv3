@@ -54,6 +54,53 @@ Validation needed Sprint 14-15 with design partners before commit to build (BACK
 
 ---
 
+## Spleed Product Articulation (Consolidated 2026-05-20)
+
+### Qué es Spleed (técnico)
+Sistema de orquestación de 6 agents (Scout, Profiler, Composer, Outreach Operator, Hermes, Gifter) sobre LLM del tenant (BYOK), con learning loops per-tenant que mejoran master prompts con base en feedback real del founder.
+
+### Por qué es defendible (moat real)
+1. Multi-tenant infrastructure (RLS + Vault + orchestration) — ya construido Sprints 1-4
+2. Master prompts curados — refinamiento continuo
+3. **Hermes layer — learning loops per-tenant** (Sprint 8 lightweight, Sprint 12+ full)
+4. BYOK como pricing accessibility lever (Sprint 7)
+
+### Cómo vendemos según audiencia
+- Customer founder (no técnico): "SDR que aprende tu estilo en 90 días. Vos traés tu Claude, nosotros le enseñamos cómo vender específicamente para tu negocio."
+- Investor: "Orchestration + learning layer sobre BYOK LLM. Moat defendible vía data flywheel per-tenant."
+- Peer founder técnico: "Infraestructura de agents con feedback loops sobre LLM BYOK. Multi-tenant, multi-channel, multi-tool."
+- Networking 30-seg: "Outbound que aprende tu voz cada semana."
+
+### Pila ordenada de capabilities
+| Capa | Defendibilidad |
+|---|---|
+| LLM (BYOK) | Commodity, no diferenciador |
+| 6 agents orchestration | Feature CORE, parcialmente defendible |
+| Tools + integraciones | Accessible vía Composio/Apify/Apollo |
+| Master prompts curados | Time + craft, replicable con esfuerzo |
+| **Hermes learning loops** | **MOAT defendible — data flywheel** |
+| Multi-tenant infra | Operational backbone, hard to copy |
+
+### Lo que es feature vs lo que es moat
+- Microsites: feature opcional, NO moat (puede ser GitHub skill)
+- Gifter integration: feature diferenciable, NO moat
+- Slack/iMessage/WhatsApp channel: feature, NO moat
+- 6 agents orquestados: feature CORE, parcialmente defendible
+- **Hermes learning: MOAT real**
+- **Multi-tenant infra Sprint 1-4: barrier alta de entrada**
+- **BYOK: pricing lever + accessibility, NO moat**
+
+### Customer mental model
+"Tu Claude responde preguntas. El Spleed-Claude vende para vos."
+
+### Roadmap implications
+- Sprint 7 incluye BYOK + Slack como decisiones core
+- Sprint 8 incluye Hermes lightweight (feedback capture)
+- Sprint 9-10 dashboard incluye Hermes visibility (founder ve cómo su Spleed aprende con el tiempo)
+- Sprint 12+ Hermes full version cuando hay volume de feedback real para extraer patterns
+
+---
+
 ## 1. Pitch funcional (qué hace Spleed)
 
 Spleed es un workspace agéntico donde un founder define su ICP en lenguaje natural y 5 agentes especializados ejecutan el ciclo completo de outbound founder-led:
@@ -490,19 +537,24 @@ Ver sección 4 para schema. Outputs:
 - Agent runtime ejecutando un "hello world" agent en queue
 - Apify integration funcionando con un solo actor (LinkedIn Profile)
 
-### Sprint 5-8 — Los 5 agentes
-- Sprint 5: Scout end-to-end (input ICP → output 50 leads en columna Discovered)
-- Sprint 6: Profiler end-to-end (output dossier rico de cada lead) con agent-browser de Vercel para top 30% leads por fit_score (browser-strategic enrichment). **Critical week** — calidad del Profiler determina todo lo siguiente
-- Sprint 7: Composer + Outreach Operator (microsite + email/LI sent)
-- Sprint 8: Gifter + iMessage approval flow + Stripe Issuing
+### Sprint 5-8 — Agents core + BYOK + Hermes lightweight
+- Sprint 5: Scout end-to-end (current) — input ICP → output 50 leads en columna Discovered
+- Sprint 6: Profiler + browser (agent-browser Vercel) — dossier rico per lead. **Critical week** — calidad del Profiler determina todo lo siguiente
+- Sprint 7: Composer + Outreach Operator + **BYOK + Slack channel** (microsite + email/LI sent, BYOK del LLM, Slack approvals)
+- Sprint 8: **Hermes lightweight (feedback capture) + Composer/Outreach polish**
 
-### Sprint 9-12 — Frontend, design partners, billing
-- Sprint 9: Frontend dashboard funcional (kanban + lead detail + integrations)
-- Sprint 10: Onboarding 5 design partners, fixes según feedback
-- Sprint 11: Stripe billing real, primeros pagos
-- Sprint 12: Hardening, security review, runbooks
+### Sprint 9-11 — Dashboard MVP + MVP target
+- Sprint 9: Dashboard MVP shell — auth + kanban + lead detail
+- Sprint 10-11: Dashboard completion + integrations setup UI + onboarding
+- **MVP target: Sprint 11 (~mid-julio 2026)**
+
+### Sprint 12+ — Hermes full + Phase 2
+- Sprint 12+: Hermes full version (pattern extraction + prompt evolution) when volume de feedback real available
+- Phase 2 (Sprint 13-24): Multi-recipient notifications, social ring routing research, WhatsApp channel
 
 > **DECISION 2026-05-11 (cierre Sprint 2):** Browser strategy adelantado de Phase 2 a Sprint 6. Justificación: agent-browser de Vercel (32.7K stars GitHub, producción) encapsula la complejidad de Phase 2 con setup mínimo. Beneficio: producto realmente diferenciado desde MVP (autonomía dirigida con cobertura real, anti-hallucination via screenshots, behavioral signals). Costo: ~$15/founder/mes adicional COGS (browser cloud sessions). Margin Founder tier: 68% → 66%.
+
+> **DECISION 2026-05-20 (post Houston event):** Roadmap committed — Sprint 7 incluye BYOK + Slack como decisiones core (BACKLOG-027, BACKLOG-028). Sprint 8 incluye Hermes lightweight (BACKLOG-032). iMessage/Sendblue DESCARTADO MVP, WhatsApp deferred Phase 2. MVP target Sprint 11. Hermes full version Sprint 12+ cuando hay volume de feedback real para extraer patterns. Re-articulación de positioning en sección "Spleed Product Articulation (Consolidated 2026-05-20)" arriba.
 
 ---
 

@@ -1229,6 +1229,253 @@ Confirmed patterns matching Spleed thesis: cold outreach mostly "opened sin resp
 
 ---
 
+## Sprint 7-8 — BYOK + Slack + Hermes lightweight (post Houston event 2026-05-20)
+
+### BACKLOG-027: BYOK del LLM (Bring Your Own Key)
+
+**Status:** Committed for Sprint 7 implementation
+**Priority:** ⭐⭐ CRITICAL — pricing differentiator + unit economics
+**Origin:** Felipe Salinas / Houston.ai event observation 2026-05-19, validated against ICP v2 (founders B2B tech-savvy ya tienen Claude Teams/Pro)
+
+**Hypothesis:**
+Tenants conectan su propia cuenta Claude/OpenAI via OAuth. Spleed orquesta sus agents sobre el LLM del tenant. Pricing más bajo ($297-497/mes vs $497-1500/mes managed), margins más altos (75-79% vs 20-37%).
+
+**Why Sprint 7 (no Sprint 13-14 como original):**
+- Vault per-tenant Sprint 1 ya soporta secrets per-user
+- 5 design partners YA tienen Claude Teams/Pro (validado mental)
+- Margins desde día 1 vs después
+- Pricing más accesible facilita conversion design partners US
+
+**Validation needed (Sprint 6 antes de implementation):**
+- Confirmar con Anthropic si OAuth público está disponible para third-party apps, O si require enterprise tier
+- Si solo enterprise: fallback a API key paste manual con UX decente
+- Test con Sebastián (educación) si está dispuesto a "conectar Claude"
+
+**Sprint 7 implementation:**
+- Anthropic OAuth flow (research first)
+- Token storage encrypted en Vault (existing infrastructure)
+- Routing logic: use tenant's key OR Spleed's key (tier-based)
+- Rate limit handling graceful (cuando user hittea su limit)
+- Error UX (user's key invalid → re-auth flow)
+- BYOK toggle en onboarding
+
+**Risks:**
+- Anthropic puede NO ofrecer OAuth público → friction mayor
+- Rate limits del tenant pueden hacer producto sentirse roto
+- Multi-tenant complexity (secret management per user)
+
+**Cost economics validated 2026-05-19:**
+- Sin BYOK: $86/mes Claude API per customer (Spleed paga)
+- Con BYOK: $0/mes (tenant paga en su plan Claude Teams)
+- Margin improvement: 20% → 37% solo BYOK, 20% → 75-79% BYOK + Slack combinados
+
+---
+
+### BACKLOG-028: Channel strategy MVP — Slack primary, iMessage descartado
+
+**Status:** Committed for Sprint 7 implementation
+**Priority:** ⭐⭐ CRITICAL — affects unit economics + ICP fit
+**Origin:** Felipe re-evaluation 2026-05-19 post Houston.ai event
+
+**Decision:**
+Slack como channel primario MVP. iMessage (Sendblue) DESCARTADO. WhatsApp Business deferred a Phase 2 (Sprint 13-14).
+
+**Justification:**
+- Costo: Slack $0 vs Sendblue $200-700/mes per customer
+- Setup complexity: Slack OAuth 1 día vs WhatsApp Business 1-2 semanas verificación Meta
+- Design partner relationship: Felipe tiene cercanía 1:1 con los 5 iniciales → puede compensar channel friction con personal nudge
+
+**Asunción explícita:**
+Design partners van a usar Slack daily a pesar de que algunos NO son Slack-native. Cercanía personal compensa engagement friction durante design partner phase.
+
+**Trade-off accepted:**
+Possible engagement sub-óptimo vs WhatsApp en algunos design partners. OK durante MVP porque relación 1:1 permite manual nudging.
+
+**Re-evaluation triggers (Phase 2 → WhatsApp):**
+- Customers nuevos (no design partners) reportan baja engagement
+- >30% missed approvals attributable to channel friction
+- LatAm-heavy customers solicitan WhatsApp específico
+- Onboarding completion rate <70% por friction Slack setup
+
+**Sprint 7 implementation:**
+- Slack OAuth flow (workspace + bot install)
+- Bot messages para approvals (interactive blocks con buttons)
+- Channel routing: por default DM al founder
+- Notification preferences (urgency thresholds)
+- Webhook handling para responses
+
+**WhatsApp Business path (Phase 2 / Sprint 13-14):**
+- Meta Business verification (proceso 1-2 semanas, paralelizable)
+- Interactive messages para approvals
+- Multi-channel routing: user choice Slack OR WhatsApp
+
+---
+
+### BACKLOG-029: Spleed positioning consolidado
+
+**Status:** Strategic positioning document (active 2026-05-20)
+**Priority:** ⭐ HIGH — affects all marketing + sales + roadmap
+**Origin:** Felipe reflection post Houston.ai event + sleep 2026-05-19/20
+
+**Context:**
+Re-articulación de propuesta de valor de Spleed. NO es pivot. ES refinamiento de positioning con framing más fuerte.
+
+**Old positioning (deprecated):**
+"Spleed is a 6-agent system that executes founder-led sales for you."
+
+**New positioning:**
+"Spleed is the orchestration + learning infrastructure that turns your standard Claude/GPT into a sales system that improves over time, specific to your tenant."
+
+**Three pillars:**
+1. **Orchestration** — 6 agents coordinated, state-managed, multi-tenant
+2. **Tools + integraciones** — Apollo, Apify, Slack, browser, gifting managed for you
+3. **Learning loops (Hermes)** — tenant feedback continuously improves master prompts
+
+**De-emphasized:**
+- Microsites as differentiator (now optional feature, BACKLOG-031)
+- "6 agents" as marketing pitch (technical detail, not lead message)
+- "iMessage as channel" (Slack primary MVP, BACKLOG-028)
+
+**Re-emphasized:**
+- Quality of opening message (BACKLOG-031)
+- Scout ↔ Profiler ↔ Composer integration
+- Hermes learning per-tenant (BACKLOG-030, BACKLOG-032)
+- BYOK as accessibility lever (BACKLOG-027)
+
+**Marketing messages by audience:**
+- Customer founder: "Tu Claude responde preguntas. El Spleed-Claude vende para vos."
+- Investor: "Orchestration + learning sobre BYOK LLM. Data flywheel per-tenant es el moat."
+- Peer founder técnico: "Multi-tenant agent orchestration con feedback loops sobre LLM BYOK."
+- 30-second pitch: "Outbound que aprende tu voz cada semana."
+
+---
+
+### BACKLOG-030: Hermes architecture — Learning loops per-tenant
+
+**Status:** Architectural design (Sprint 8 lightweight, Sprint 12+ full)
+**Priority:** ⭐⭐ CRITICAL — defines product moat
+**Origin:** Felipe strategic insight 2026-05-20 post Houston.ai
+
+**Hypothesis:**
+Each tenant gets a personalized "Hermes layer" that observes their approvals, edits, rejections, and outcomes. Hermes updates master prompts for that tenant over time.
+
+**Data captured per tenant:**
+- Drafts approved as-is (positive pattern)
+- Drafts edited before send (delta = what to adjust)
+- Drafts rejected (negative pattern)
+- Sent emails → response rates (success metric)
+- Sent emails → meeting booked (conversion metric)
+
+**Pattern accumulation per tenant:**
+- Hook types that convert (industry-specific)
+- Email length sweet spot
+- Tone calibration per ICP
+- Subject line patterns that get opens
+- Best times to send per audience
+
+**Why this is the moat:**
+- After 90 days, tenant's Spleed-Claude meaningfully better than raw Claude
+- After 180 days, switching cost is real (lose all learned patterns)
+- Defendible vía data flywheel — más uso = mejor producto = más retention
+
+**Implementation path:**
+- Sprint 8 lightweight (BACKLOG-032): feedback capture only, no pattern extraction
+- Sprint 12+ full (Phase 2): pattern extraction + prompt evolution + A/B testing
+
+---
+
+### BACKLOG-031: Opening Message Quality — el momento de la verdad
+
+**Status:** Sprint 7 focus area (Composer)
+**Priority:** ⭐⭐ HIGH — primary product value
+**Origin:** Felipe insight 2026-05-20 — "Microsite puede ser GitHub skill, primer mensaje es lo que define el producto"
+
+**Insight:**
+Microsite, gifting, sequences — todo amplifica. Pero si primer mensaje no convierte, nada importa. Spleed core value = quality del primer mensaje (opening message).
+
+**Sprint 7 Composer focus:**
+- Multiple opening variants generated per lead
+- Hook classification (mutual connection, recent news, specific pain, event-based, podcast quote, expansion signal, hiring signal, etc)
+- Founder picks best variant from 2-3 options
+- A/B testing infrastructure foundation (feeds Hermes Sprint 8)
+
+**Quality metrics tracked (Sprint 8 Hermes captures):**
+- Open rate per opening variant
+- Reply rate per opening variant
+- Meeting-booked rate per opening variant
+- Time-to-meeting (some opens take long, that's OK signal)
+
+**Anti-patterns to avoid:**
+- Generic Apollo-style template feel
+- Sales-y AI-generated obvious
+- Spam mimicry triggers
+- Over-formal corporate speak
+
+**Microsites status (deferred from "core" to "feature"):**
+- Microsites SÍ generan Sprint 7 (Composer puede generarlos)
+- PERO no son pitch principal del producto
+- Tier básico: outreach + tracking (sin microsite)
+- Tier premium: + microsites + gifting
+
+---
+
+### BACKLOG-032: Hermes Sprint 8 lightweight implementation
+
+**Status:** Sprint 8 implementation committed
+**Priority:** ⭐⭐ CRITICAL — sets up data flywheel from day 1
+**Origin:** Decision 2026-05-20 — lightweight Sprint 8, full Sprint 12+
+
+**Sprint 8 scope — Feedback capture infrastructure only:**
+
+- agent_feedback table (already in schema Sprint 1-2, extend if needed):
+  - lead_id, draft_id, agent_type, action_taken (approved/edited/rejected), original_output, edited_output, founder_id, timestamp, outcome_known
+
+- Webhook handlers para outcomes:
+  - Email replied → feedback row updated
+  - Meeting booked → success outcome
+  - 30 days silence → fail outcome
+  - Lead unsubscribe → strong negative signal
+
+- Slack approval flow → feedback row creation:
+  - Founder presses "Approve" → action_taken = approved
+  - Founder presses "Edit" → action_taken = edited, capture diff
+  - Founder presses "Reject" → action_taken = rejected
+  - Founder skips → action_taken = ignored (after timeout)
+
+- Dashboard visibility (Sprint 9-10):
+  - Founder sees count of feedback collected
+  - "Tu Spleed ha aprendido de X drafts esta semana"
+  - Visual de patterns (high-level, sin exposing prompt internals)
+
+**NOT in Sprint 8 (deferred Sprint 12+):**
+- Pattern extraction job
+- Master prompt evolution
+- A/B testing infrastructure
+- Per-tenant prompt versioning
+
+**Why lightweight Sprint 8:**
+- Sin volume de feedback real (necesitás 60-90 días de uso), pattern extraction no tiene material para trabajar
+- Sprint 11 MVP timeline mantiene vs slip a Sprint 13
+- Data captured desde día 1 → cuando Sprint 12 implementemos full version, hay material real
+
+**Success criteria Sprint 8:**
+- Sebastián concierge work genera 500+ feedback rows en mes 1
+- Outcomes tracking 80%+ leads (sent → outcome known)
+- Slack approval UI low-friction (founder no abandona)
+
+**Dependencies:**
+- Composer (Sprint 7) generates drafts (input)
+- Outreach Operator (Sprint 7-8) captures outcomes (input)
+- Dashboard (Sprint 9-10) shows learning (output)
+
+**Sprint 12+ full version preview:**
+- Pattern extraction job (BullMQ weekly per tenant)
+- Master prompt updates per tenant in agent_templates
+- A/B testing prompt_variants table (NEW)
+- Tenant runs variants, winner becomes active
+
+---
+
 ## Cómo se mantiene este archivo
 
 - Cuando una decisión de producto se difiere conscientemente, se agrega aquí
