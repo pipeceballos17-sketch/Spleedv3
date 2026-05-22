@@ -1556,6 +1556,197 @@ Cons:
 
 ---
 
+### BACKLOG-034: db:inspect dev tool — schema verification sin psql
+
+**Status:** Operational tool, build cuando necesidad recurra
+**Priority:** LOW — quality-of-life
+**Origin:** Sprint 5a 2026-05-21 (psql no en PATH WSL, inspect-sprint5.ts
+one-off script creado y borrado al final)
+
+**Context:**
+Durante Sprint 5a, psql no estaba accesible directo en WSL Ubuntu.
+Felipe creó inspect-sprint5.ts one-off script para verificar schema
+(scout_runs + cost_events) después de migration. Script se borró
+al cleanup.
+
+Este pattern probablemente repite en Sprint 6+, 7+, 8+ cuando
+agreguemos schemas nuevos (Profiler dossiers, Composer assets,
+Hermes feedback patterns, etc).
+
+**Hypothesis:**
+Generalizar a tool reusable elimina el costo recurrente de
+re-crear scripts one-off.
+
+**Proposed implementation:**
+- packages/db/src/scripts/inspect.ts (NEW)
+- Comando: bun run db:inspect <table_name>
+- Output formato:
+  - Columns (name, type, nullable, default)
+  - Constraints (PK, FK, unique, check)
+  - Indexes (name, columns, partial conditions)
+  - RLS policies (name, command, roles, expression)
+  - Row count (sample)
+- Optional: bun run db:inspect-all (todas las tablas, summary)
+- Optional: bun run db:diff (compara local vs remote)
+
+**Effort estimate:** ~2-3 hrs (incluye tests + integration con turbo)
+
+**Build trigger:**
+- Cuando Sprint 6+ requiera re-verificar schema 2+ veces sin psql disponible
+- Felipe decide oportunísticamente
+
+**Alternative considered (rejected):**
+- Install psql global en WSL (works but Brittle across machines)
+- Use Supabase Studio UI (UI lookup tedious para development workflow)
+
+---
+
+### BACKLOG-035: Slack interactive buttons + Block Kit (full OAuth)
+
+**Status:** Deferred to Sprint 9 con dashboard MVP
+**Priority:** ⭐ HIGH — UX differentiator para approvals
+**Origin:** Sprint 5b refinement 2026-05-21 (Decisión D: incoming
+webhook simple Sprint 5b, full OAuth Sprint 9)
+
+**Context:**
+Sprint 5b implementa Slack Incoming Webhook simple (text-only) para
+notifications de failures + quota. Esto es base mínima.
+
+Sprint 9-10 cuando dashboard exista, upgrade a Slack App full con
+interactive buttons.
+
+**Full Slack App features Sprint 9+:**
+- OAuth flow (workspace + bot install via dashboard "Connect Slack"
+  button)
+- Interactive Block Kit messages (buttons inline)
+- Approval buttons per lead/draft:
+  - "✓ Approve & queue outreach"
+  - "✗ Reject this lead"
+  - "📝 Edit before send"
+  - "👀 View dossier" (link to dashboard)
+- Webhook handler para button clicks (Slack interactivity endpoint)
+- Threading: comments en thread del lead
+
+**Why Sprint 9 not earlier:**
+- Requires dashboard fallback UX (link "View dossier" needs target)
+- Full OAuth requires Slack App distribution decision (internal vs public)
+- Button interactions feed Hermes Sprint 8+ (BACKLOG-030, BACKLOG-037)
+- Compete value: visible diferenciador vs email-only competitors
+
+**Dependencies:**
+- Sprint 5b Slack webhook foundation (commit 864b91e) ✓
+- Sprint 8 Hermes feedback capture (BACKLOG-030) — button click = signal
+- Sprint 9 dashboard MVP — "View dossier" target
+
+**Effort estimate:** ~4-6 días (Slack App setup + OAuth + Block Kit +
+webhook handlers + tests + dashboard integration)
+
+**Validation needed:**
+- Conversación con Slack support sobre distribution model (internal
+  vs public app)
+- Felipe Salinas: ¿cómo Houston maneja Slack OAuth distribution?
+
+---
+
+### BACKLOG-036: Per-tenant LLM model selection UI (Houston pattern)
+
+**Status:** Deferred to Sprint 9-10 dashboard implementation
+**Priority:** ⭐ HIGH — BYOK differentiator + cost flexibility
+**Origin:** Sprint 5b refinement 2026-05-21 (Decisión B: Sonnet
+hardcoded + env override, full UI Sprint 9-10)
+
+**Context:**
+Sprint 5b hardcodes Sonnet 4.6 default con SCOUT_LLM_MODEL env
+override para Felipe testing. Tenants NO eligen modelo todavía.
+
+Validation Houston.ai (Felipe Salinas event 2026-05-19): tenants
+conectan su Claude account (BYOK BACKLOG-027) y eligen modelo per
+agent task. Pattern validado en producción.
+
+**Houston-validated pattern:**
+- Tenant conecta su Claude account (BYOK Sprint 7, BACKLOG-027)
+- Tenant elige modelo per task type:
+  - Scout discovery: Haiku (cheap, fast) o Sonnet (better quality)
+  - Profiler enrichment: Sonnet (default) o Opus (premium)
+  - Composer writing: Sonnet (default) o Opus (best copy)
+  - Hermes pattern learning: Sonnet (analysis)
+- Spleed muestra costo estimado per modelo
+- Spleed advierte si Opus va a quemar plan rápido
+
+**Implementation Sprint 9-10:**
+- Add column: orgs.preferred_models jsonb default '{}'
+  Ejemplo: {scout: 'claude-haiku-4-5', profiler: 'claude-sonnet-4-6',
+            composer: 'claude-opus-4-7'}
+- Dashboard settings page: model selection per agent
+- Cost estimation visible (per run, per month projection)
+- Per-agent override capability
+- Warning UI: "Opus 5x más caro que Sonnet, ¿confirmar?"
+
+**Why Sprint 9-10 not Sprint 5b:**
+- Requires UI (dashboard) para selection — no UI Sprint 5b
+- Requires BYOK (BACKLOG-027 Sprint 7) primero
+- Sin UI, feature invisible = vaporware
+- Sprint 5b scope ya dense
+
+**Dependencies:**
+- BACKLOG-027 BYOK del LLM (Sprint 7)
+- Dashboard MVP shell (Sprint 9, BACKLOG-019)
+- Anthropic SDK supports multiple models in 1 client instance (verified
+  Sprint 5b CP1 — SCOUT_LLM_MODEL env switches model correctly)
+
+**Effort estimate:** ~2-3 días (UI components + DB column + cost
+estimation logic + tests)
+
+---
+
+### BACKLOG-037: Slack interactive approval flow + Hermes feedback integration
+
+**Status:** Deferred to Sprint 10-11 (after Hermes lightweight done)
+**Priority:** MEDIUM — closes feedback loop, completa learning architecture
+**Origin:** Sprint 5b refinement 2026-05-21
+
+**Context:**
+Sprint 5b Slack notifications son one-way (notify failures via webhook).
+Sprint 9 agrega Slack interactive buttons (BACKLOG-035).
+Sprint 10-11 conecta button clicks a Hermes feedback table (BACKLOG-030,
+BACKLOG-032).
+
+**Feedback signal capture flow:**
+- Slack button "Approve" → action_taken='approved' en agent_feedback table
+- Slack button "Reject" → action_taken='rejected' + optional reason text
+- Slack button "Edit" → action_taken='edited' + edited_text diff captured
+- Slack button "View dossier" → action_taken='viewed' (engagement signal)
+
+**Why this matters:**
+Sin esto, Hermes Sprint 8 captura feedback solo via dashboard. Slack
+es channel primary (BACKLOG-028) → feedback debe fluir desde ahí
+también. Sin Hermes capturando button clicks via Slack, learning loop
+está INCOMPLETO.
+
+**Implementation Sprint 10-11:**
+- Slack interactivity endpoint handler (validates signature)
+- Map Slack button payload → agent_feedback INSERT
+- Update agent state machine (lead.status transitions based on feedback)
+- Sprint 11+ pattern: rejection reason → feedback metadata jsonb
+
+**Dependencies:**
+- BACKLOG-035 Slack interactive buttons (Sprint 9)
+- BACKLOG-030 Hermes feedback capture (Sprint 8, BACKLOG-032 lightweight
+  version)
+- Slack signing secret config (existing webhook URL pattern Sprint 5b)
+
+**Effort estimate:** ~2 días (button click handler + feedback row
+creation + signature validation + tests)
+
+**Risks:**
+- Slack signing secret rotation — capture in Vault per-tenant (Sprint 1
+  infra)
+- Replay attack prevention — verify timestamp tolerance
+- Tenant isolation — button clicks correctly attributed to org via
+  webhook_url association
+
+---
+
 ## Cómo se mantiene este archivo
 
 - Cuando una decisión de producto se difiere conscientemente, se agrega aquí
