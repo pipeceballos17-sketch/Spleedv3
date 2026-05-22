@@ -558,6 +558,76 @@ Ver sección 4 para schema. Outputs:
 
 ---
 
+## Sprint 6 — Profiler agent + browser intelligence (Decisions Consolidated 2026-05-22)
+
+### Las 8 decisiones tactic Sprint 6:
+
+1. **Browser provider: Vercel agent-browser** (honor ADR Sprint 2)
+   - npm install -g agent-browser
+   - CDP-based, headless Chromium
+   - Annotated screenshots para multimodal AI razonamiento
+
+2. **Sources Sprint 6 MVP: 3 sources**
+   - Company website (Vercel agent-browser)
+   - LinkedIn profile + posts + company (Apify scrapers)
+   - Recent news Google News (Vercel agent-browser)
+   - Twitter/Podcast/GitHub diferidos Phase 2
+
+3. **Dossier generation: Structured pipeline**
+   - 3 LLM extraction calls paralelos (uno por source)
+   - 1 LLM synthesis call final
+   - Total: 4 LLM calls per dossier
+   - Quality > cost (es input crítico de Composer Sprint 7)
+
+4. **Profiler timing: Async post-Scout (separate BullMQ queue)**
+   - Scout discovers → INSERT leads status='discovered' → enqueue
+     profiler job per lead
+   - Profiler worker pulls 'discovered' leads → enrich → 'profiled'
+   - Failure isolation entre Scout y Profiler
+   - lead.status lifecycle: discovered → profiling → profiled → composed → outreaching
+
+5. **Screenshot evidence: Hybrid (text always + screenshot solo hook moment)**
+   - Cada source: text extraction full
+   - Annotated screenshots solo cuando confidence > 0.7 en hook detection
+   - Storage en Supabase Storage org-scoped (~750MB/mes total estimate)
+   - lead_dossiers.evidence_urls jsonb: [{ hookId, url, capturedAt }]
+
+6. **Re-enrichment: Once and forget Sprint 6 MVP**
+   - NO automatic refresh
+   - Founder workaround: delete + re-add lead
+   - Smart hybrid lifecycle-aware diferido a Sprint 12+ (BACKLOG-038)
+
+7. **LinkedIn strategy: Híbrido Apify + Vercel**
+   - LinkedIn: Apify community scrapers (stealth, residential proxies)
+   - Company website + news: Vercel agent-browser (zero ToS risk)
+   - Sales Navigator API diferido a Phase 2 enterprise (BACKLOG-039)
+   - Cost LinkedIn: ~$0.10 per lead via Apify
+
+8. **Cost budget: Soft warning + dashboard visibility**
+   - Track all costs en cost_events (Sprint 5a infrastructure)
+   - Slack alert si monthly tenant spend > $1000
+   - NO automatic pause (relationship-driven Sprint 6)
+   - Hard caps diferidos a Sprint 13-14 self-serve (BACKLOG-040)
+
+### Cost per dossier breakdown (validated)
+
+| Componente | Cost per lead |
+|---|---|
+| Vercel agent-browser (company + news) | $0.005 |
+| Apify LinkedIn (profile + posts + company) | $0.08-0.11 |
+| Anthropic LLM (4 calls: 3 extraction + 1 synthesis) | $0.06-0.08 |
+| Supabase Storage (screenshots) | $0.0001 |
+| **TOTAL per dossier** | **~$0.15-0.20** |
+
+### Sprint 6 sub-sprints split:
+
+- **Sprint 6a:** Foundation (Vercel browser integration + Profiler worker
+  + company website source + dossier schema + 8-12 tests)
+- **Sprint 6b:** LinkedIn integration (Apify) + news source + structured
+  pipeline LLM + screenshots + remaining tests
+
+---
+
 ## 9. Reglas operacionales para Claude Code
 
 Estas son las que te rigen como agente de desarrollo en Antigravity. Síguelas estrictamente.

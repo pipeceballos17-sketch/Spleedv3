@@ -1747,6 +1747,111 @@ creation + signature validation + tests)
 
 ---
 
+### BACKLOG-038: Lead re-enrichment policy (smart hybrid lifecycle-aware)
+
+**Status:** Deferred to Sprint 12+
+**Priority:** MEDIUM — value depende de retention real de tenants
+**Origin:** Sprint 6 Decision 6 negotiation 2026-05-22
+
+**Context:**
+Sprint 6 Profiler implementa "once and forget" — leads enriched 1 vez,
+nunca refresh automatic. Esto funciona para MVP donde cada lead es
+nuevo, PERO leads stale después de 30-60 días.
+
+**Hypothesis:**
+Re-enrichment value justifies cost solo para leads en ciertos lifecycle
+stages. Smart policy:
+- discovered/profiled (no contacto todavía): refresh every 14 días
+- composed/outreaching: refresh on-demand only
+- responded/rejected: NO refresh ever
+
+**Implementation Sprint 12+:**
+- Add lead.last_profiled_at column
+- BullMQ cron job nightly: find leads needing refresh, re-enqueue
+- Cost cap per tenant per month (avoid surprise bills)
+- Hermes Sprint 8 input: learns which leads benefit from refresh
+
+**Dependencies:**
+- Hermes Sprint 8 lightweight (BACKLOG-032) data accumulation
+- Dashboard Sprint 9-10 visibility de refresh policy + cost
+- BYOK Sprint 7 (BACKLOG-027) tenant paga su refresh, no Spleed
+
+**Effort estimate:** ~3-4 días
+
+---
+
+### BACKLOG-039: LinkedIn Sales Navigator API integration (Phase 2 enterprise)
+
+**Status:** Deferred to Sprint 20+ (Phase 2 enterprise tier)
+**Priority:** LOW — gate por enterprise tier validation
+**Origin:** Sprint 6 Decision 7 negotiation 2026-05-22
+
+**Context:**
+Sprint 6 LinkedIn strategy usa Apify scrapers (stealth, ~$0.10 per lead).
+TOS gray area. Funciona para MVP pero risk operacional.
+
+**Hypothesis:**
+Sales Navigator API oficial elimina ToS risk + data más rica (intent
+signals, hiring data). PERO $99-150/mes per Spleed seat = NO scalable
+hasta validación enterprise tier ($1500+/mes per tenant).
+
+**Trigger criteria:**
+- 5+ tenants paying $1500+/mes enterprise tier
+- Apify ban incidents recurrentes (que justifiquen change)
+- Spleed compliance/legal review require it
+
+**Implementation Sprint 20+:**
+- Sales Navigator API approval process (semanas)
+- OAuth flow per Spleed seat (centralized)
+- Tier-based routing: enterprise tenants use Sales Nav, others use Apify
+- Cost allocation logic (Spleed eats Sales Nav cost para enterprise tier)
+
+**Benefit:**
+- 100% ToS-compliant LinkedIn integration
+- Premium differentiator vs competitors
+- Account ban risk eliminado para enterprise
+
+**Effort estimate:** ~5-7 días + semanas de approval process
+
+---
+
+### BACKLOG-040: Cost enforcement + per-tenant hard budget caps
+
+**Status:** Deferred to Sprint 13-14 (Phase 2 self-serve)
+**Priority:** MEDIUM — required cuando Spleed onboardea self-serve
+**Origin:** Sprint 6 Decision 8 negotiation 2026-05-22
+
+**Context:**
+Sprint 6 cost policy = soft warning + dashboard visibility. Relationship-
+driven trust con design partners. Funciona en MVP phase.
+
+Cuando Spleed transition to self-serve (Phase 2, Sprint 13+), soft
+warnings NO son suficientes — tenant abuse possible (run multiple ICPs
+volumes huge), surprise bills risk Spleed financially.
+
+**Hypothesis:**
+Per-tenant monthly budget caps configurable + hard pause cuando exceeded
++ cost prediction model (Hermes Sprint 8 input).
+
+**Implementation Sprint 13-14:**
+- Per-tenant monthly budget column (orgs.monthly_cost_cap_usd)
+- Tier-based defaults:
+  - Founder $497/mes tier: cap $300/mes
+  - Pro $997/mes tier: cap $700/mes
+  - Enterprise unlimited
+- Hard pause logic: when 80% threshold reached, warn; at 100%, pause
+- Cost prediction model: estimate run cost before execution
+- Override capability (founder can boost cap manually with credit card)
+
+**Dependencies:**
+- cost_events table (Sprint 5a, ya existe ✓)
+- Dashboard Sprint 9-10 (visibility + boost capability)
+- Stripe integration (Sprint 8-9, billing)
+
+**Effort estimate:** ~3-4 días
+
+---
+
 ## Cómo se mantiene este archivo
 
 - Cuando una decisión de producto se difiere conscientemente, se agrega aquí
