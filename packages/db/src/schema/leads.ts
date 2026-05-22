@@ -218,6 +218,16 @@ export const leadDossiers = pgTable(
 
     rawSignals: jsonb('raw_signals').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
 
+    // Sprint 6 — annotated screenshot evidence for hook_candidates surfaced by Profiler.
+    // One entry per hook with screenshot uploaded to Supabase Storage (org-scoped path).
+    // sourceType matches the 3 MVP sources from Sprint 6 decisions; future sources extend.
+    evidenceUrls: jsonb('evidence_urls').$type<Array<{
+      hookId: string
+      url: string
+      capturedAt: string
+      sourceType: 'company_website' | 'linkedin' | 'news'
+    }>>().notNull().default(sql`'[]'::jsonb`),
+
     confidenceScore: real('confidence_score').default(0),
     isStale: boolean('is_stale').notNull().default(false),
     enrichedBy: text('enriched_by'),

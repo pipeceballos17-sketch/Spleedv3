@@ -1,7 +1,14 @@
 import { and, eq } from 'drizzle-orm'
 import { z } from 'zod'
-import { getServiceClient, icps as icpsTable, scoutRuns } from '@spleed/db'
 import {
+  getServiceClient,
+  icps as icpsTable,
+  leadDossiers as leadDossiersTable,
+  leads as leadsTable,
+  scoutRuns,
+} from '@spleed/db'
+import {
+  profilerWorker,
   scoutWorker,
   registerScoutCronForOrg,
   unregisterScoutCronForOrg,
@@ -236,12 +243,150 @@ async function deleteCron(req: Request, icpId: string): Promise<Response> {
   return Response.json({ removed }, { status: 200 })
 }
 
+// ─── Profiler endpoints (Sprint 6a) ───────────────────────────────────
+
+/**
+ * GET /api/leads/:id/dossier — read Profiler enrichment state for a lead.
+ *
+ * State derivation (Sprint 6 Decision 1: leads.status is the single source
+ * of truth; lead_dossiers has no status column):
+ *   - dossier row absent + lead.status='discovered'  → 'not_started'
+ *   - dossier row absent + lead.status='enriching'   → 'in_progress'
+ *     (rare race: worker has updated status but not yet upserted dossier)
+ *   - dossier row present                            → full row + derived status
+ */
+async function getLeadDossier(req: Request, leadId: string): Promise<Response> {
+  const auth = getOrgId(req)
+  if ('error' in auth) return auth.error
+
+  if (!UUID_RE.test(leadId)) {
+    return Response.json(
+      { error: 'INVALID_LEAD_ID', message: 'leadId must be a UUID' },
+      { status: 400 },
+    )
+  }
+
+  const db = getServiceClient()
+
+  const [lead] = await db
+    .select({ id: leadsTable.id, status: leadsTable.status })
+    .from(leadsTable)
+    .where(and(eq(leadsTable.id, leadId), eq(leadsTable.orgId, auth.orgId)))
+  if (!lead) {
+    return Response.json(
+      { error: 'LEAD_NOT_FOUND', message: `Lead ${leadId} not found for this org` },
+      { status: 404 },
+    )
+  }
+
+  const [dossier] = await db
+    .select()
+    .from(leadDossiersTable)
+    .where(
+      and(
+        eq(leadDossiersTable.leadId, leadId),
+        eq(leadDossiersTable.orgId, auth.orgId),
+      ),
+    )
+
+  if (!dossier) {
+    // Per Decision 1: derive state from lead.status when no dossier row
+    // exists. 'enriching' here means the worker started but didn't yet
+    // upsert the dossier seed row — narrow window but observable.
+    const derived =
+      lead.status === 'enriching' ? 'in_progress' : 'not_started'
+    return Response.json({ leadId, status: derived }, { status: 200 })
+  }
+
+  return Response.json(
+    {
+      leadId: dossier.leadId,
+      // Derived status: 'enriched' once a dossier row exists. If the lead
+      // status reverted (e.g. mid-failure cleanup) we still see the dossier
+      // briefly here — Profiler's catch path DELETEs the dossier on failure,
+      // so this state shouldn't outlive a single failed run.
+      status: lead.status === 'enriching' ? 'in_progress' : 'enriched',
+      pains: dossier.pains,
+      interests: dossier.interests,
+      giftSignals: dossier.giftSignals,
+      recentChanges: dossier.recentChanges,
+      evidenceUrls: dossier.evidenceUrls,
+      preferredChannel: dossier.preferredChannel,
+      toneMatch: dossier.toneMatch,
+      rawSignals: dossier.rawSignals,
+      confidenceScore: dossier.confidenceScore,
+      isStale: dossier.isStale,
+      enrichedBy: dossier.enrichedBy,
+      createdAt: dossier.createdAt,
+      updatedAt: dossier.updatedAt,
+    },
+    { status: 200 },
+  )
+}
+
+/**
+ * POST /api/profiler/run-lead/:leadId — manually enqueue a Profiler job.
+ * 409 if the lead is already mid-enrichment (leads.status='enriching').
+ */
+async function postProfilerRunLead(req: Request, leadId: string): Promise<Response> {
+  const auth = getOrgId(req)
+  if ('error' in auth) return auth.error
+
+  if (!UUID_RE.test(leadId)) {
+    return Response.json(
+      { error: 'INVALID_LEAD_ID', message: 'leadId must be a UUID' },
+      { status: 400 },
+    )
+  }
+
+  const db = getServiceClient()
+
+  const [lead] = await db
+    .select({ id: leadsTable.id, status: leadsTable.status })
+    .from(leadsTable)
+    .where(and(eq(leadsTable.id, leadId), eq(leadsTable.orgId, auth.orgId)))
+  if (!lead) {
+    return Response.json(
+      { error: 'LEAD_NOT_FOUND', message: `Lead ${leadId} not found for this org` },
+      { status: 404 },
+    )
+  }
+
+  // Conflict: an enrichment is already in flight. Idempotency at the BullMQ
+  // layer would dedupe by jobId, but the API returns 409 explicitly so the
+  // caller knows the prior job is still running instead of silently no-oping.
+  if (lead.status === 'enriching') {
+    return Response.json(
+      {
+        error: 'PROFILER_ALREADY_RUNNING',
+        message: `Lead ${leadId} is already being enriched`,
+      },
+      { status: 409 },
+    )
+  }
+
+  await profilerWorker.enqueue({
+    leadId,
+    orgId: auth.orgId,
+    triggerType: 'manual',
+  })
+
+  // The Profiler worker's idempotencyKey is `profiler-${leadId}`. Expose it
+  // so callers polling GET /dossier or tailing logs can correlate.
+  return Response.json(
+    { profilerJobId: `profiler-${leadId}`, status: 'queued' },
+    { status: 200 },
+  )
+}
+
 // ─── Bun.serve dispatch ───────────────────────────────────────────────
 
 const SCOUT_RUN_GET_RE = /^\/api\/scout\/runs\/([^/]+)$/
 const ICP_CRON_ACTIVATE_RE = /^\/api\/icps\/([^/]+)\/activate-cron$/
 const ICP_CRON_PAUSE_RE = /^\/api\/icps\/([^/]+)\/pause-cron$/
 const ICP_CRON_DELETE_RE = /^\/api\/icps\/([^/]+)\/cron$/
+const LEAD_DOSSIER_GET_RE = /^\/api\/leads\/([^/]+)\/dossier$/
+const PROFILER_RUN_LEAD_RE = /^\/api\/profiler\/run-lead\/([^/]+)$/
 
 const server = Bun.serve({
   port,
@@ -289,6 +434,18 @@ const server = Bun.serve({
           )
         }
       }
+      const profilerRun = url.pathname.match(PROFILER_RUN_LEAD_RE)
+      if (profilerRun) {
+        try {
+          return await postProfilerRunLead(req, profilerRun[1]!)
+        } catch (err) {
+          console.error('[POST /api/profiler/run-lead/:leadId] internal error', err)
+          return Response.json(
+            { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
+            { status: 500 },
+          )
+        }
+      }
     }
 
     if (req.method === 'DELETE') {
@@ -313,6 +470,18 @@ const server = Bun.serve({
           return await getScoutRun(req, m[1]!)
         } catch (err) {
           console.error('[GET /api/scout/runs/:runId] internal error', err)
+          return Response.json(
+            { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
+            { status: 500 },
+          )
+        }
+      }
+      const dossier = url.pathname.match(LEAD_DOSSIER_GET_RE)
+      if (dossier) {
+        try {
+          return await getLeadDossier(req, dossier[1]!)
+        } catch (err) {
+          console.error('[GET /api/leads/:id/dossier] internal error', err)
           return Response.json(
             { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
             { status: 500 },

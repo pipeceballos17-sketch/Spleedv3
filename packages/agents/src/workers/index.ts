@@ -2,12 +2,13 @@ import type { Worker } from 'bullmq'
 import { closeRedisConnection } from './queue'
 import { helloWorldWorker } from './hello-world.worker'
 import { scoutWorker } from './scout.worker'
+import { profilerWorker } from './profiler.worker'
 
 /**
  * Registry of all workers started by `startAllWorkers()`. Sprint 5+ appends
  * scout/profiler/composer/outreach/gifter/concierge workers here.
  */
-export const ALL_WORKERS = [helloWorldWorker, scoutWorker] as const
+export const ALL_WORKERS = [helloWorldWorker, scoutWorker, profilerWorker] as const
 
 export interface RunningWorkers {
   readonly count: number
@@ -44,3 +45,10 @@ export {
   getScoutCron,
   scoutCronSchedulerId,
 } from './scout-cron'
+export {
+  profilerWorker,
+  processProfilerJob,
+  type ProfilerJob,
+  type ProfilerResult,
+  type ProcessProfilerJobOverrides,
+} from './profiler.worker'

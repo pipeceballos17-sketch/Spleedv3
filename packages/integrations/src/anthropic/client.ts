@@ -1,5 +1,20 @@
-import { mockScoreLead, mockLatencyMs, MOCK_TOKENS_IN, MOCK_TOKENS_OUT } from './mock'
-import type { ScoreLeadInput, ScoreLeadResult, ScoutLlmModel } from './types'
+import {
+  mockExtractCompanyWebsiteSignals,
+  mockLatencyMs,
+  mockProfilerLatencyMs,
+  mockScoreLead,
+  MOCK_PROFILER_TOKENS_IN,
+  MOCK_PROFILER_TOKENS_OUT,
+  MOCK_TOKENS_IN,
+  MOCK_TOKENS_OUT,
+} from './mock'
+import type {
+  ExtractCompanyWebsiteSignalsInput,
+  ExtractCompanyWebsiteSignalsResult,
+  ScoreLeadInput,
+  ScoreLeadResult,
+  ScoutLlmModel,
+} from './types'
 
 export interface AnthropicClientConfig {
   /** Anthropic API key. Sprint 7 resolves per-tenant via Vault (BACKLOG-027 BYOK). */
@@ -111,6 +126,55 @@ export class AnthropicClient {
     // buildRerankPrompt(input) and parseRerankResponse(response).
     throw new Error(
       '[anthropic] live mode not implemented in Sprint 5b — wire real client in Sprint 7 with BYOK (BACKLOG-027)',
+    )
+  }
+
+  // ─── Profiler (Sprint 6a) — company-website extraction ─────────────
+
+  /**
+   * Extract structured signals (stage, news, pains, hiring, growth, hooks)
+   * from a single source — Sprint 6a wires this to the company website
+   * source only. Sprint 6b adds LinkedIn + news source calls (3 extractions
+   * + 1 synthesis structured pipeline per Sprint 6 Decision 3).
+   *
+   * Caller (agents profiler/company-website-extraction.ts) is responsible
+   * for building both system and user prompts and for layering hookId
+   * uuids onto hook_candidates before persisting to lead_dossiers.
+   */
+  async extractCompanyWebsiteSignals(
+    input: ExtractCompanyWebsiteSignalsInput,
+  ): Promise<ExtractCompanyWebsiteSignalsResult> {
+    if (this.mockMode) {
+      return this.extractCompanyWebsiteSignalsMock(input)
+    }
+    return this.extractCompanyWebsiteSignalsLive(input)
+  }
+
+  private async extractCompanyWebsiteSignalsMock(
+    input: ExtractCompanyWebsiteSignalsInput,
+  ): Promise<ExtractCompanyWebsiteSignalsResult> {
+    const signals = mockExtractCompanyWebsiteSignals({ domainHint: input.domainHint })
+    const tokensIn = MOCK_PROFILER_TOKENS_IN
+    const tokensOut = MOCK_PROFILER_TOKENS_OUT
+    // Latency hint: prefer domainHint, fall back to prompt length so unknown
+    // domains still produce stable per-input latency in tests.
+    const latencyHint = input.domainHint ?? `len-${input.userPrompt.length}`
+    const latencyMs = mockProfilerLatencyMs(latencyHint)
+    const costUsd = computeCostUsd(this.model, tokensIn, tokensOut)
+    return { signals, tokensIn, tokensOut, costUsd, latencyMs }
+  }
+
+  private async extractCompanyWebsiteSignalsLive(
+    _input: ExtractCompanyWebsiteSignalsInput,
+  ): Promise<ExtractCompanyWebsiteSignalsResult> {
+    // Sprint 7+: wire to @anthropic-ai/sdk Messages.create with system prompt
+    // marked `cache_control: ephemeral` (PROFILER_SYSTEM_PROMPT is stable
+    // across a profiling batch so prompt-cache amortization is meaningful).
+    // Use this.apiKey from Vault (BYOK per-tenant — BACKLOG-027). Robust JSON
+    // parse: pull first balanced object out of response.content[0].text,
+    // fall back to EMPTY_SIGNALS on parse failure.
+    throw new Error(
+      '[anthropic] live mode not implemented in Sprint 6a — wire real client in Sprint 7+ with BYOK (BACKLOG-027)',
     )
   }
 }

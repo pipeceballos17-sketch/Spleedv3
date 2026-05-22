@@ -123,4 +123,6 @@ export const costProviderEnum = pgEnum('cost_provider', [
   'sendblue',
   'slack',
   'resend',
+  // Sprint 6 — Vercel agent-browser for company website + news scraping (Profiler).
+  'vercel_browser',
 ])

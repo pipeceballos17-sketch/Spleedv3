@@ -57,3 +57,66 @@ export interface ScoreLeadResult {
   costUsd: number
   latencyMs: number
 }
+
+// ─── Profiler (Sprint 6a) — company-website extraction ─────────────────
+
+/**
+ * Investment/growth stage signals inferable from a company's web presence.
+ * `unknown` is the safe default when content carries no stage marker —
+ * Profiler should fall back to neutral routing rather than guess.
+ */
+export type CompanyStage =
+  | 'pre-seed'
+  | 'seed'
+  | 'series-a'
+  | 'series-b'
+  | 'growth'
+  | 'enterprise'
+  | 'unknown'
+
+/**
+ * Raw signal JSON the LLM returns — hook_candidates here LACK the hookId.
+ * The agent layer (packages/agents/.../profiler/company-website-extraction.ts)
+ * generates uuids for each hook before persisting to lead_dossiers.evidence_urls.
+ */
+export interface ExtractedCompanyWebsiteSignals {
+  company_stage: CompanyStage
+  recent_news: string[]
+  pain_signals: string[]
+  hiring_signals: string[]
+  growth_signals: string[]
+  hook_candidates: Array<{
+    hook: string
+    evidence: string
+    confidence: number
+  }>
+}
+
+export interface ExtractCompanyWebsiteSignalsInput {
+  /**
+   * System prompt — pre-built by the agent caller. Caller imports
+   * PROFILER_SYSTEM_PROMPT from @spleed/db/seed/prompts so the seeded
+   * agent_templates row and the runtime call stay in lockstep.
+   */
+  systemPrompt: string
+  /**
+   * User prompt with lead/icp/pageContent rendered. Caller builds via
+   * buildCompanyWebsiteUserPrompt (agents profiler/prompts.ts).
+   */
+  userPrompt: string
+  /**
+   * Optional deterministic-mock key. Pass `lead.company_domain` (preferred)
+   * or `lead.company`. Mock client looks up curated signals against this
+   * key; unknown keys yield empty-but-valid signals (graceful degradation).
+   */
+  domainHint?: string
+}
+
+export interface ExtractCompanyWebsiteSignalsResult {
+  signals: ExtractedCompanyWebsiteSignals
+  /** Mock returns fixed estimates; live (Sprint 7+) reads usage from SDK. */
+  tokensIn: number
+  tokensOut: number
+  costUsd: number
+  latencyMs: number
+}

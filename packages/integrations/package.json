@@ -9,7 +9,8 @@
     ".": "./src/index.ts",
     "./apollo": "./src/apollo/index.ts",
     "./anthropic": "./src/anthropic/index.ts",
-    "./slack": "./src/slack/index.ts"
+    "./slack": "./src/slack/index.ts",
+    "./vercel-browser": "./src/vercel-browser/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

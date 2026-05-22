@@ -6,6 +6,10 @@ export {
   MODEL_COSTS_PER_M_TOKENS,
 } from './client'
 export type {
+  CompanyStage,
+  ExtractCompanyWebsiteSignalsInput,
+  ExtractCompanyWebsiteSignalsResult,
+  ExtractedCompanyWebsiteSignals,
   IcpShape,
   ScoreLeadInput,
   ScoreLeadResult,
@@ -16,4 +20,15 @@ export {
   buildRerankPrompt,
   parseRerankResponse,
 } from './prompts'
-export { mockScoreLead, MOCK_TOKENS_IN, MOCK_TOKENS_OUT, mockLatencyMs } from './mock'
+export {
+  EMPTY_SIGNALS,
+  MOCK_COMPANY_SIGNALS,
+  MOCK_PROFILER_TOKENS_IN,
+  MOCK_PROFILER_TOKENS_OUT,
+  MOCK_TOKENS_IN,
+  MOCK_TOKENS_OUT,
+  mockExtractCompanyWebsiteSignals,
+  mockLatencyMs,
+  mockProfilerLatencyMs,
+  mockScoreLead,
+} from './mock'

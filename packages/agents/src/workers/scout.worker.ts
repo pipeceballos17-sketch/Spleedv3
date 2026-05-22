@@ -21,6 +21,7 @@ import {
 import { classifyError, TaggedAgentError, withTransientRetry } from '../runtime/errors'
 import type { WorkerContext } from './context'
 import { defineWorker } from './define'
+import { profilerWorker } from './profiler.worker'
 
 /**
  * Sprint 5a Scout worker. Pipeline: load ICP → Apollo search (mock by default) →
@@ -432,6 +433,9 @@ export async function processScoutJob(
 
     // ─── Phase 5: Insert leads with ON CONFLICT DO NOTHING ────────────
     let leadsInsertedCount = 0
+    // Sprint 6a — lifted to outer scope so Phase 6 (Profiler enqueue) can
+    // fan out one profiler job per actually-inserted lead.
+    let insertedLeadIds: string[] = []
     if (topCandidates.length > 0) {
       const rowsToInsert = topCandidates.map(({ candidate, finalScore, llmResult }) => ({
         orgId,
@@ -470,6 +474,7 @@ export async function processScoutJob(
         .onConflictDoNothing()
         .returning({ id: leadsTable.id })
 
+      insertedLeadIds = inserted.map((r) => r.id)
       leadsInsertedCount = inserted.length
     }
 
@@ -503,6 +508,42 @@ export async function processScoutJob(
         errorSummary: partialErrorSummary,
       })
       .where(and(eq(scoutRunsTable.id, runId), eq(scoutRunsTable.orgId, orgId)))
+
+    // ─── Phase 6 (Sprint 6a): fan out Profiler per inserted lead ──────
+    // Async decoupled — Scout returns 'completed'/'partial' once its own
+    // pipeline succeeds, independently of whether Profiler jobs land or run.
+    // Per Sprint 6 Decision 4, Scout's status does NOT track Profiler
+    // outcomes; Profiler updates leads.status='enriching'→'enriched' on its
+    // own schedule. Failed enqueue is non-blocking — leads stay in
+    // 'discovered' and a re-run or manual trigger can re-enqueue.
+    if (insertedLeadIds.length > 0) {
+      const profilerEnqueueResults = await Promise.allSettled(
+        insertedLeadIds.map((leadId) =>
+          profilerWorker.enqueue({
+            leadId,
+            orgId,
+            scoutRunId: runId,
+            triggerType: 'auto_from_scout',
+          }),
+          // jobId omitted: defineWorker resolves it via Profiler's
+          // idempotencyKey → 'profiler-${leadId}', collapsing duplicates.
+        ),
+      )
+      const enqueueSucceeded = profilerEnqueueResults.filter(
+        (r) => r.status === 'fulfilled',
+      ).length
+      const enqueueFailed = profilerEnqueueResults.length - enqueueSucceeded
+      ctx.logger.info(
+        { runId, totalLeads: insertedLeadIds.length, enqueueSucceeded },
+        'scout: profiler enqueue summary',
+      )
+      if (enqueueFailed > 0) {
+        ctx.logger.warn(
+          { runId, enqueueFailed, totalLeads: insertedLeadIds.length },
+          'scout: profiler enqueue had failures (non-blocking)',
+        )
+      }
+    }
 
     return {
       ok: true as const,
