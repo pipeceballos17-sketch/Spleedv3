@@ -46,6 +46,11 @@ export const orgs = pgTable(
     stripeSubscriptionId: text('stripe_subscription_id'),
     stripeIssuingAccountId: text('stripe_issuing_account_id'),
 
+    // Sprint 5b — Slack Incoming Webhook URL for Scout failure / quota notifications.
+    // Founder pastes this manually after creating in their Slack workspace settings.
+    // Full OAuth + interactive buttons → BACKLOG-035 Sprint 9.
+    slackWebhookUrl: text('slack_webhook_url'),
+
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

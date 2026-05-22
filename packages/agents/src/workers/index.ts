@@ -36,3 +36,11 @@ export { createScopedDb, type ScopedDb, type WorkerContext } from './context'
 export { getRedisConnection, closeRedisConnection, createQueue } from './queue'
 export { helloWorldWorker, type HelloWorldJob, type HelloWorldResult } from './hello-world.worker'
 export { scoutWorker, processScoutJob, type ScoutJob, type ScoutResult } from './scout.worker'
+export {
+  registerScoutCronForOrg,
+  unregisterScoutCronForOrg,
+  pauseScoutCron,
+  resumeScoutCron,
+  getScoutCron,
+  scoutCronSchedulerId,
+} from './scout-cron'

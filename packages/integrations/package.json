@@ -7,7 +7,9 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./apollo": "./src/apollo/index.ts"
+    "./apollo": "./src/apollo/index.ts",
+    "./anthropic": "./src/anthropic/index.ts",
+    "./slack": "./src/slack/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

@@ -50,11 +50,19 @@ export const scoutRuns = pgTable(
     startedAt: timestamp('started_at', { withTimezone: true }),
     finishedAt: timestamp('finished_at', { withTimezone: true }),
 
-    // Error envelope. Shape: { code, message, retry_count, last_failure_at }.
-    // Sprint 5a writes baseline { code: 'UNKNOWN', message }; Sprint 5b granular.
+    // Sprint 5b — LLM re-ranking phase counts. NULL on runs that failed
+    // before reaching Phase 3 (Apollo error, ICP_NOT_FOUND, etc).
+    llmRerankedCount: integer('llm_reranked_count'),
+    llmTotalCostUsd: numeric('llm_total_cost_usd', { precision: 10, scale: 6 }),
+
+    // Error envelope. Sprint 5b extends with `category` so dashboards can
+    // bucket failures (transient/permanent/partial/quota) without parsing
+    // the message string. Sprint 5a runs predate `category` — readers must
+    // default to 'permanent' when the field is missing.
     errorSummary: jsonb('error_summary').$type<{
       code: string
       message: string
+      category?: 'transient' | 'permanent' | 'partial' | 'quota'
       retry_count?: number
       last_failure_at?: string
     }>(),

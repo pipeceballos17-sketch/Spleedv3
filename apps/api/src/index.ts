@@ -1,7 +1,13 @@
 import { and, eq } from 'drizzle-orm'
 import { z } from 'zod'
 import { getServiceClient, icps as icpsTable, scoutRuns } from '@spleed/db'
-import { scoutWorker } from '@spleed/agents/workers'
+import {
+  scoutWorker,
+  registerScoutCronForOrg,
+  unregisterScoutCronForOrg,
+  pauseScoutCron,
+  getScoutCron,
+} from '@spleed/agents/workers'
 import { startWorkers } from './workers/start'
 
 const port = Number(process.env.API_PORT ?? 3001)
@@ -38,7 +44,11 @@ function getOrgId(req: Request): { orgId: string } | { error: Response } {
 
 const ScoutRunBodySchema = z.object({
   icpId: z.string().uuid(),
-  volume: z.number().int().positive().max(200).default(50),
+  // Sprint 5b: max 100 (down from Sprint 5a's 200). Hard cap matches the
+  // LLM_RERANK_CAP in scout.worker.ts so every inserted lead carries a
+  // combinedScore (mixing combined vs sql-only scores breaks sort fairness).
+  // Sprint 9+ may lift this once Hermes feedback justifies more LLM spend.
+  volume: z.number().int().positive().max(100).default(50),
 })
 
 /**
@@ -158,9 +168,80 @@ async function getScoutRun(req: Request, runId: string): Promise<Response> {
   )
 }
 
+// ─── ICP cron management (Sprint 5b CP2) ──────────────────────────────
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+async function requireIcpOwnership(
+  icpId: string,
+  orgId: string,
+): Promise<Response | null> {
+  if (!UUID_RE.test(icpId)) {
+    return Response.json(
+      { error: 'INVALID_ICP_ID', message: 'icpId must be a UUID' },
+      { status: 400 },
+    )
+  }
+  const db = getServiceClient()
+  const rows = await db
+    .select({ id: icpsTable.id })
+    .from(icpsTable)
+    .where(and(eq(icpsTable.id, icpId), eq(icpsTable.orgId, orgId)))
+  if (rows.length === 0) {
+    return Response.json(
+      { error: 'ICP_NOT_FOUND', message: `ICP ${icpId} not found for this org` },
+      { status: 404 },
+    )
+  }
+  return null
+}
+
+async function postActivateCron(req: Request, icpId: string): Promise<Response> {
+  const auth = getOrgId(req)
+  if ('error' in auth) return auth.error
+  const ownership = await requireIcpOwnership(icpId, auth.orgId)
+  if (ownership) return ownership
+
+  const schedulerId = await registerScoutCronForOrg(auth.orgId, icpId)
+  const scheduler = await getScoutCron(auth.orgId, icpId)
+  return Response.json(
+    {
+      schedulerId,
+      pattern: scheduler?.pattern,
+      tz: scheduler?.tz,
+      nextFireAt: scheduler?.nextFireAt,
+    },
+    { status: 200 },
+  )
+}
+
+async function postPauseCron(req: Request, icpId: string): Promise<Response> {
+  const auth = getOrgId(req)
+  if ('error' in auth) return auth.error
+  const ownership = await requireIcpOwnership(icpId, auth.orgId)
+  if (ownership) return ownership
+
+  const removed = await pauseScoutCron(auth.orgId, icpId)
+  return Response.json({ paused: removed }, { status: 200 })
+}
+
+async function deleteCron(req: Request, icpId: string): Promise<Response> {
+  const auth = getOrgId(req)
+  if ('error' in auth) return auth.error
+  const ownership = await requireIcpOwnership(icpId, auth.orgId)
+  if (ownership) return ownership
+
+  const removed = await unregisterScoutCronForOrg(auth.orgId, icpId)
+  return Response.json({ removed }, { status: 200 })
+}
+
 // ─── Bun.serve dispatch ───────────────────────────────────────────────
 
 const SCOUT_RUN_GET_RE = /^\/api\/scout\/runs\/([^/]+)$/
+const ICP_CRON_ACTIVATE_RE = /^\/api\/icps\/([^/]+)\/activate-cron$/
+const ICP_CRON_PAUSE_RE = /^\/api\/icps\/([^/]+)\/pause-cron$/
+const ICP_CRON_DELETE_RE = /^\/api\/icps\/([^/]+)\/cron$/
 
 const server = Bun.serve({
   port,
@@ -180,6 +261,48 @@ const server = Bun.serve({
           { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
           { status: 500 },
         )
+      }
+    }
+
+    if (req.method === 'POST') {
+      const activate = url.pathname.match(ICP_CRON_ACTIVATE_RE)
+      if (activate) {
+        try {
+          return await postActivateCron(req, activate[1]!)
+        } catch (err) {
+          console.error('[POST /api/icps/:id/activate-cron] internal error', err)
+          return Response.json(
+            { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
+            { status: 500 },
+          )
+        }
+      }
+      const pause = url.pathname.match(ICP_CRON_PAUSE_RE)
+      if (pause) {
+        try {
+          return await postPauseCron(req, pause[1]!)
+        } catch (err) {
+          console.error('[POST /api/icps/:id/pause-cron] internal error', err)
+          return Response.json(
+            { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
+            { status: 500 },
+          )
+        }
+      }
+    }
+
+    if (req.method === 'DELETE') {
+      const cronDelete = url.pathname.match(ICP_CRON_DELETE_RE)
+      if (cronDelete) {
+        try {
+          return await deleteCron(req, cronDelete[1]!)
+        } catch (err) {
+          console.error('[DELETE /api/icps/:id/cron] internal error', err)
+          return Response.json(
+            { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
+            { status: 500 },
+          )
+        }
       }
     }
 
