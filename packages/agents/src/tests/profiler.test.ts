@@ -1,18 +1,25 @@
 /**
- * Sprint 6a Profiler test suite.
+ * Profiler test suite (Sprint 6a + Sprint 6b).
  *
- * Coverage:
- *   - 4 unit tests for extractCompanyWebsiteSignals (the agent-layer fn)
- *   - 5 integration tests for processProfilerJob (DB end-to-end, BullMQ bypassed)
- *   - 2 multi-tenant isolation tests
- *   - 2 error-scenario tests
+ * Sprint 6a coverage (13 tests):
+ *   - 4 unit tests for extractCompanyWebsiteSignals
+ *   - 5 integration tests for processProfilerJob (single-source flow)
+ *   - 2 multi-tenant isolation
+ *   - 2 error-scenario
  *
- * Total: 13 tests.
+ * Sprint 6b additions (12 tests, target 25 total):
+ *   - 3 unit (linkedin / news / synthesis extractions)
+ *   - 4 integration (full 3-source / linkedin fail / news retry / all-fail)
+ *   - 1 synthesis dedupe edge
+ *   - 1 evidence_urls populated
+ *   - 1 cross-org evidence_urls isolation
+ *   - 1 Apify mock determinism
+ *   - 1 partial enrichment test re-purposed in-place from Sprint 6a #12
  *
- * Strategy mirrors scout.test.ts: call `processProfilerJob` directly with a
- * synthetic ctx, exercising the full DB pipeline without spinning Redis.
- * BullMQ integration (the Scout → Profiler enqueue handshake under load)
- * lands in a Sprint 7 dedicated worker-orchestration test.
+ * Strategy mirrors scout.test.ts: call `processProfilerJob` directly
+ * with a synthetic ctx, exercising the full DB pipeline without
+ * spinning Redis. BullMQ integration lands in a Sprint 7 dedicated
+ * worker-orchestration test.
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'bun:test'
@@ -33,10 +40,20 @@ import {
   AnthropicClient,
   type IcpShape,
 } from '@spleed/integrations/anthropic'
+import { ApifyClient } from '@spleed/integrations/apify'
+import {
+  MOCK_SLACK_SENDS,
+  SlackWebhookClient,
+  resetMockSlackSends,
+} from '@spleed/integrations/slack'
 import { VercelBrowserClient } from '@spleed/integrations/vercel-browser'
 import {
   extractCompanyWebsiteSignals,
+  extractLinkedinSignals,
+  extractNewsSignals,
+  synthesizeDossier,
   type LeadShape,
+  type SynthesisSourceInput,
 } from '../agents/profiler'
 import { TaggedAgentError } from '../runtime/errors'
 import { createScopedDb, type WorkerContext } from '../workers/context'
@@ -95,6 +112,8 @@ interface LeadSeed {
   role: string
   companyDomain?: string | null
   email?: string | null
+  /** Sprint 6b — Profiler LinkedIn source uses this URL when present. */
+  linkedinUrl?: string | null
   status?: 'discovered' | 'enriching' | 'enriched'
 }
 
@@ -113,6 +132,7 @@ async function createLead(seed: LeadSeed): Promise<string> {
       role: seed.role,
       companyDomain: seed.companyDomain ?? null,
       email: seed.email ?? null,
+      linkedinUrl: seed.linkedinUrl ?? null,
       foundVia: 'profiler_test',
       fitScore: 80,
     })
@@ -414,7 +434,9 @@ describe('processProfilerJob — end-to-end pipeline', () => {
       .from(leadDossiersTable)
       .where(eq(leadDossiersTable.leadId, leadId))
     expect(dossier).toBeDefined()
-    expect(dossier?.enrichedBy).toBe('profiler_agent_v1')
+    // Sprint 6b bumped enrichedBy from v1 (single-source) to v2 (3-source
+    // structured pipeline + synthesis).
+    expect(dossier?.enrichedBy).toBe('profiler_agent_v2')
     expect((dossier?.pains as unknown[]).length).toBeGreaterThan(0)
     expect((dossier?.interests as unknown[]).length).toBeGreaterThan(0)
     expect((dossier?.recentChanges as unknown[]).length).toBeGreaterThan(0)
@@ -424,7 +446,13 @@ describe('processProfilerJob — end-to-end pipeline', () => {
     expect(raw.companyWebsiteSignals?.company_stage).toBe('series-a')
   })
 
-  it('writes one cost_event per provider (vercel_browser + anthropic)', async () => {
+  it('Sprint 6b cost_events: 8 rows for full 3-source enrichment', async () => {
+    // Full enrichment writes one cost_event per provider operation:
+    //   vercel_browser × 2 (company website scrape, news scrape)
+    //   apify × 2          (linkedin profile, linkedin posts)
+    //   anthropic × 4      (3 extractions + 1 synthesis)
+    // Total = 8. Each row carries provider/operation_type/cost_usd so
+    // dashboards can roll up cost by source.
     const leadId = await createLead({
       orgId: PROFILER_ORG_A,
       icpId: ICP_PROFILER_SAAS,
@@ -434,6 +462,7 @@ describe('processProfilerJob — end-to-end pipeline', () => {
       company: 'Pulse Analytics',
       role: 'Founder',
       companyDomain: 'pulseanalytics.io',
+      linkedinUrl: 'https://linkedin.com/in/sarahchen',
     })
 
     await processProfilerJob(
@@ -452,16 +481,33 @@ describe('processProfilerJob — end-to-end pipeline', () => {
         ),
       )
 
-    expect(events).toHaveLength(2)
-    const vercelEvent = events.find((e) => e.provider === 'vercel_browser')
-    const anthropicEvent = events.find((e) => e.provider === 'anthropic')
-    expect(vercelEvent?.operationType).toBe('scrape_company')
-    expect(vercelEvent?.success).toBe(true)
-    expect(Number(vercelEvent?.costUsd)).toBeGreaterThan(0)
-    expect(anthropicEvent?.operationType).toBe('extraction_company_website')
-    expect(anthropicEvent?.success).toBe(true)
-    expect(anthropicEvent?.tokensIn).toBe(1800)
-    expect(anthropicEvent?.tokensOut).toBe(500)
+    expect(events).toHaveLength(8)
+
+    // Provider breakdown — 2 vercel + 2 apify + 4 anthropic.
+    const byProvider = events.reduce<Record<string, number>>((acc, e) => {
+      acc[e.provider] = (acc[e.provider] ?? 0) + 1
+      return acc
+    }, {})
+    expect(byProvider['vercel_browser']).toBe(2)
+    expect(byProvider['apify']).toBe(2)
+    expect(byProvider['anthropic']).toBe(4)
+
+    // All 8 operation_types must appear (set sanity check).
+    const opTypes = new Set(events.map((e) => e.operationType))
+    expect(opTypes).toContain('scrape_company')
+    expect(opTypes).toContain('extraction_company_website')
+    expect(opTypes).toContain('scrape_profile')
+    expect(opTypes).toContain('scrape_posts')
+    expect(opTypes).toContain('extraction_linkedin')
+    expect(opTypes).toContain('scrape_news')
+    expect(opTypes).toContain('extraction_news')
+    expect(opTypes).toContain('synthesis')
+
+    // Synthesis cost row carries token counts (Sonnet 4.6 ~2200 in / 600 out).
+    const synthesis = events.find((e) => e.operationType === 'synthesis')
+    expect(synthesis?.tokensIn).toBe(2200)
+    expect(synthesis?.tokensOut).toBe(600)
+    expect(synthesis?.success).toBe(true)
   })
 
   it('lead without companyDomain → enriched with empty dossier (graceful)', async () => {
@@ -647,7 +693,11 @@ describe('Profiler — multi-tenant isolation', () => {
 // ─── 12-13. Error scenarios ───────────────────────────────────────────
 
 describe('Profiler — error handling', () => {
-  it('Vercel browser PERMANENT failure → leads.status reverts + dossier deleted', async () => {
+  it('Sprint 6b: company_website PERMANENT failure → partial enrichment (linkedin + news succeed)', async () => {
+    // Sprint 6a tested single-source failure as full revert. Sprint 6b
+    // refactors to Promise.allSettled across 3 sources, so a single
+    // failure becomes partial enrichment instead — only ALL-3-fail
+    // triggers the revert path (covered by a separate test below).
     const leadId = await createLead({
       orgId: PROFILER_ORG_A,
       icpId: ICP_PROFILER_SAAS,
@@ -657,52 +707,61 @@ describe('Profiler — error handling', () => {
       company: 'Pulse Analytics',
       role: 'Founder',
       companyDomain: 'pulseanalytics.io',
+      linkedinUrl: 'https://linkedin.com/in/sarahchen',
     })
 
-    // Patch scrape to throw an auth-failed style error — classifyError will
-    // bucket as PERMANENT, escalating immediately past withTransientRetry.
     const failingVercel = new VercelBrowserClient()
     failingVercel.scrapeCompanyWebsite = async () => {
       throw new Error('VERCEL_AUTH_FAILED: invalid api key')
     }
+    // scrapeGoogleNews is NOT patched on this instance, so news still works.
 
-    let caught: unknown
-    try {
-      await processProfilerJob(
-        makeJob({ leadId, orgId: PROFILER_ORG_A }),
-        makeCtx(PROFILER_ORG_A),
-        // Fast backoff keeps retry escalation under a few ms.
-        { vercel: failingVercel, retryBackoffBaseMs: 1 },
-      )
-    } catch (e) {
-      caught = e
-    }
-    expect(caught).toBeInstanceOf(Error)
+    const result = await processProfilerJob(
+      makeJob({ leadId, orgId: PROFILER_ORG_A }),
+      makeCtx(PROFILER_ORG_A),
+      { vercel: failingVercel, retryBackoffBaseMs: 1 },
+    )
+
+    expect(result.status).toBe('enriched')
+    expect(result.failedSources).toEqual(['company_website'])
+    expect(result.successfulSources).toContain('linkedin')
+    expect(result.successfulSources).toContain('news')
 
     const db = getServiceClient()
     const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId))
-    // Revert to 'discovered' so a re-trigger can attempt fresh.
-    expect(lead?.status).toBe('discovered')
-    // Partial dossier deleted — next run starts clean.
-    const dossiers = await db
+    expect(lead?.status).toBe('enriched')
+
+    const [dossier] = await db
       .select()
       .from(leadDossiersTable)
       .where(eq(leadDossiersTable.leadId, leadId))
-    expect(dossiers).toHaveLength(0)
+    expect(dossier).toBeDefined()
+    const raw = dossier?.rawSignals as {
+      partialEnrichment?: boolean
+      missingSources?: string[]
+      companyWebsiteSignals?: unknown
+      linkedinSignals?: unknown
+      newsSignals?: unknown
+    }
+    expect(raw.partialEnrichment).toBe(true)
+    expect(raw.missingSources).toEqual(['company_website'])
+    expect(raw.companyWebsiteSignals).toBeNull()
+    expect(raw.linkedinSignals).not.toBeNull()
+    expect(raw.newsSignals).not.toBeNull()
 
-    // Failure-path cost_event recorded (success=false).
-    const events = await db
+    // Failed-source cost_event still recorded so dashboards see the spend.
+    const failedEvents = await db
       .select()
       .from(costEvents)
       .where(
         and(
           eq(costEvents.orgId, PROFILER_ORG_A),
           eq(costEvents.provider, 'vercel_browser'),
+          eq(costEvents.success, false),
         ),
       )
-    expect(events).toHaveLength(1)
-    expect(events[0]?.success).toBe(false)
-    expect(events[0]?.errorCode).toContain('VERCEL_AUTH_FAILED')
+    expect(failedEvents.length).toBeGreaterThanOrEqual(1)
+    expect(failedEvents[0]?.errorCode).toContain('VERCEL_AUTH_FAILED')
   })
 
   it('non-existent leadId → throws TaggedAgentError(LEAD_NOT_FOUND)', async () => {
@@ -719,5 +778,557 @@ describe('Profiler — error handling', () => {
     expect(caught).toBeInstanceOf(TaggedAgentError)
     expect((caught as TaggedAgentError).tag).toBe('LEAD_NOT_FOUND')
     expect((caught as TaggedAgentError).classification).toBe('permanent')
+  })
+})
+
+// ─── 14-15. Sprint 6b — LinkedIn + News extraction units ─────────────
+
+describe('extractLinkedinSignals — unit (Sprint 6b)', () => {
+  it('Sarah Chen profile + posts → series-a stage + Series A hook + UUIDs', async () => {
+    const apify = new ApifyClient()
+    const anthropic = new AnthropicClient({ apiKey: 'mock' })
+    const profile = await apify.scrapeLinkedinProfile(
+      'https://linkedin.com/in/sarahchen',
+    )
+    const posts = await apify.scrapeLinkedinPosts('https://linkedin.com/in/sarahchen')
+
+    const lead: LeadShape = {
+      fullName: 'Sarah Chen',
+      firstName: 'Sarah',
+      lastName: 'Chen',
+      company: 'Pulse Analytics',
+      role: 'Founder & CEO',
+      companyDomain: 'pulseanalytics.io',
+      linkedinUrl: 'https://linkedin.com/in/sarahchen',
+    }
+
+    const result = await extractLinkedinSignals({
+      profile: profile.profile,
+      posts: posts.posts,
+      lead,
+      icp: SAAS_ICP,
+      anthropicClient: anthropic,
+    })
+
+    expect(result.signals.company_stage).toBe('series-a')
+    expect(result.signals.hook_candidates.length).toBeGreaterThan(0)
+    // Series A specifically — curated LinkedIn extraction mock cites the
+    // 412-reaction post quote.
+    const seriesAHook = result.signals.hook_candidates.find((h) =>
+      h.hook.toLowerCase().includes('series a'),
+    )
+    expect(seriesAHook).toBeDefined()
+    expect(seriesAHook?.evidence.toLowerCase()).toContain('costanoa')
+
+    // Every hook carries a fresh uuid stamped by the agent layer.
+    for (const hc of result.signals.hook_candidates) {
+      expect(hc.hookId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      )
+    }
+    expect(result.tokensIn).toBe(1800)
+    expect(result.tokensOut).toBe(500)
+  })
+})
+
+describe('extractNewsSignals — unit (Sprint 6b)', () => {
+  it('pulseanalytics.io news articles → series-a + TechCrunch coverage in recent_news', async () => {
+    const vercel = new VercelBrowserClient()
+    const anthropic = new AnthropicClient({ apiKey: 'mock' })
+    const news = await vercel.scrapeGoogleNews(
+      '"Pulse Analytics" OR site:pulseanalytics.io',
+    )
+
+    const lead: LeadShape = {
+      fullName: 'Sarah Chen',
+      firstName: 'Sarah',
+      lastName: 'Chen',
+      company: 'Pulse Analytics',
+      role: 'Founder',
+      companyDomain: 'pulseanalytics.io',
+    }
+
+    const result = await extractNewsSignals({
+      articles: news.articles,
+      lead,
+      icp: SAAS_ICP,
+      anthropicClient: anthropic,
+    })
+
+    expect(result.signals.company_stage).toBe('series-a')
+    const techCrunchMention = result.signals.recent_news.find((n) =>
+      n.toLowerCase().includes('techcrunch'),
+    )
+    expect(techCrunchMention).toBeDefined()
+    expect(result.signals.hook_candidates.length).toBeGreaterThan(0)
+    expect(result.tokensIn).toBe(1200)
+    expect(result.tokensOut).toBe(400)
+  })
+})
+
+// ─── 16. Sprint 6b — Synthesis unit ─────────────────────────────────
+
+describe('synthesizeDossier — unit (Sprint 6b)', () => {
+  it('Sarah Chen 3 sources high quality → confidence 0.88 + dedupe (5→3 hooks)', async () => {
+    // Drive all 3 extractions first, then feed into synthesis. This is
+    // the same pipeline processProfilerJob runs internally, but exercised
+    // in isolation so failures here pinpoint synthesis specifically.
+    const apify = new ApifyClient()
+    const vercel = new VercelBrowserClient()
+    const anthropic = new AnthropicClient({ apiKey: 'mock' })
+    const lead: LeadShape = {
+      fullName: 'Sarah Chen',
+      firstName: 'Sarah',
+      lastName: 'Chen',
+      company: 'Pulse Analytics',
+      role: 'Founder',
+      companyDomain: 'pulseanalytics.io',
+      linkedinUrl: 'https://linkedin.com/in/sarahchen',
+    }
+
+    const webScrape = await vercel.scrapeCompanyWebsite('pulseanalytics.io')
+    const webExtract = await extractCompanyWebsiteSignals({
+      pageContent: webScrape.pageContent,
+      lead,
+      icp: SAAS_ICP,
+      anthropicClient: anthropic,
+    })
+    const profile = await apify.scrapeLinkedinProfile('https://linkedin.com/in/sarahchen')
+    const posts = await apify.scrapeLinkedinPosts('https://linkedin.com/in/sarahchen')
+    const liExtract = await extractLinkedinSignals({
+      profile: profile.profile,
+      posts: posts.posts,
+      lead,
+      icp: SAAS_ICP,
+      anthropicClient: anthropic,
+    })
+    const news = await vercel.scrapeGoogleNews('"Pulse Analytics" OR site:pulseanalytics.io')
+    const newsExtract = await extractNewsSignals({
+      articles: news.articles,
+      lead,
+      icp: SAAS_ICP,
+      anthropicClient: anthropic,
+    })
+
+    const totalRawHooks =
+      webExtract.signals.hook_candidates.length +
+      liExtract.signals.hook_candidates.length +
+      newsExtract.signals.hook_candidates.length
+    expect(totalRawHooks).toBe(5)
+
+    const sources: SynthesisSourceInput[] = [
+      { sourceName: 'company_website', signals: webExtract.signals },
+      { sourceName: 'linkedin', signals: liExtract.signals },
+      { sourceName: 'news', signals: newsExtract.signals },
+    ]
+
+    const synthesis = await synthesizeDossier({
+      sources,
+      partialEnrichment: false,
+      missingSources: [],
+      lead,
+      icp: SAAS_ICP,
+      anthropicClient: anthropic,
+    })
+
+    // Curated dossier confidence for pulseanalytics.io = 0.88 (full 3 sources).
+    expect(synthesis.confidenceScore).toBe(0.88)
+    // Dedupe: 5 raw → 3 synthesis hooks.
+    expect(synthesis.hookCandidates.length).toBe(3)
+    // recommendedAngle MUST cite a specific source per PROFILER_SYNTHESIS_PROMPT.
+    expect(synthesis.recommendedAngle.toLowerCase()).toContain('techcrunch')
+    // painInferred is a sentence-level synthesis.
+    expect(synthesis.painInferred.length).toBeGreaterThan(0)
+  })
+})
+
+// ─── 17-20. Sprint 6b — Worker integration ──────────────────────────
+
+describe('processProfilerJob — Sprint 6b full pipeline', () => {
+  it('full 3-source enrichment Sarah Chen → successfulSources=3 + evidence_urls across 3 source types', async () => {
+    const leadId = await createLead({
+      orgId: PROFILER_ORG_A,
+      icpId: ICP_PROFILER_SAAS,
+      fullName: 'Sarah Chen',
+      firstName: 'Sarah',
+      lastName: 'Chen',
+      company: 'Pulse Analytics',
+      role: 'Founder & CEO',
+      companyDomain: 'pulseanalytics.io',
+      linkedinUrl: 'https://linkedin.com/in/sarahchen',
+    })
+
+    const result = await processProfilerJob(
+      makeJob({ leadId, orgId: PROFILER_ORG_A, triggerType: 'auto_from_scout' }),
+      makeCtx(PROFILER_ORG_A),
+    )
+
+    expect(result.status).toBe('enriched')
+    expect(result.successfulSources).toEqual([
+      'company_website',
+      'linkedin',
+      'news',
+    ])
+    expect(result.failedSources).toEqual([])
+    // Full enrichment: total cost ~$0.156 (per CP3 demo). Bound loosely
+    // to tolerate minor token tweaks in the mock.
+    expect(result.costUsd).toBeGreaterThan(0.14)
+    expect(result.costUsd).toBeLessThan(0.18)
+
+    const db = getServiceClient()
+    const [dossier] = await db
+      .select()
+      .from(leadDossiersTable)
+      .where(eq(leadDossiersTable.leadId, leadId))
+    const raw = dossier?.rawSignals as {
+      partialEnrichment?: boolean
+      missingSources?: string[]
+      synthesis?: { hookCandidates?: unknown[]; recommendedAngle?: string }
+      companyWebsiteSignals?: unknown
+      linkedinSignals?: unknown
+      newsSignals?: unknown
+    }
+    expect(raw.partialEnrichment).toBe(false)
+    expect(raw.missingSources).toEqual([])
+    expect(raw.synthesis?.hookCandidates).toBeDefined()
+    expect((raw.synthesis?.hookCandidates as unknown[])?.length).toBe(3)
+    expect(raw.companyWebsiteSignals).not.toBeNull()
+    expect(raw.linkedinSignals).not.toBeNull()
+    expect(raw.newsSignals).not.toBeNull()
+
+    // evidence_urls has entries from all 3 source types.
+    const evidenceUrls = dossier?.evidenceUrls as Array<{ sourceType: string }>
+    const sourceTypes = new Set(evidenceUrls.map((e) => e.sourceType))
+    expect(sourceTypes).toEqual(new Set(['company_website', 'linkedin', 'news']))
+  })
+
+  it('LinkedIn PERMANENT failure → partial enrichment (linkedinSignals=null)', async () => {
+    const leadId = await createLead({
+      orgId: PROFILER_ORG_A,
+      icpId: ICP_PROFILER_SAAS,
+      fullName: 'Sarah Chen',
+      firstName: 'Sarah',
+      lastName: 'Chen',
+      company: 'Pulse Analytics',
+      role: 'Founder',
+      companyDomain: 'pulseanalytics.io',
+      linkedinUrl: 'https://linkedin.com/in/sarahchen',
+    })
+
+    const failingApify = new ApifyClient()
+    failingApify.scrapeLinkedinProfile = async () => {
+      throw new Error('APIFY_AUTH_FAILED: invalid token')
+    }
+    failingApify.scrapeLinkedinPosts = async () => {
+      throw new Error('APIFY_AUTH_FAILED: invalid token')
+    }
+
+    const result = await processProfilerJob(
+      makeJob({ leadId, orgId: PROFILER_ORG_A }),
+      makeCtx(PROFILER_ORG_A),
+      { apify: failingApify, retryBackoffBaseMs: 1 },
+    )
+
+    expect(result.status).toBe('enriched')
+    expect(result.failedSources).toEqual(['linkedin'])
+    expect(result.successfulSources).toContain('company_website')
+    expect(result.successfulSources).toContain('news')
+
+    const db = getServiceClient()
+    const [dossier] = await db
+      .select()
+      .from(leadDossiersTable)
+      .where(eq(leadDossiersTable.leadId, leadId))
+    const raw = dossier?.rawSignals as {
+      partialEnrichment?: boolean
+      missingSources?: string[]
+      linkedinSignals?: unknown
+      companyWebsiteSignals?: unknown
+      newsSignals?: unknown
+    }
+    expect(raw.partialEnrichment).toBe(true)
+    expect(raw.missingSources).toEqual(['linkedin'])
+    expect(raw.linkedinSignals).toBeNull()
+    expect(raw.companyWebsiteSignals).not.toBeNull()
+    expect(raw.newsSignals).not.toBeNull()
+  })
+
+  it('News TRANSIENT failure (rate-limit) → withTransientRetry recovers, full enrichment', async () => {
+    const leadId = await createLead({
+      orgId: PROFILER_ORG_A,
+      icpId: ICP_PROFILER_SAAS,
+      fullName: 'Sarah Chen',
+      firstName: 'Sarah',
+      lastName: 'Chen',
+      company: 'Pulse Analytics',
+      role: 'Founder',
+      companyDomain: 'pulseanalytics.io',
+      linkedinUrl: 'https://linkedin.com/in/sarahchen',
+    })
+
+    // Same Vercel instance for company_website + news. Patch ONLY
+    // scrapeGoogleNews to throw a rate-limit on attempts 1-2 then succeed.
+    const flakyVercel = new VercelBrowserClient()
+    const originalScrape = flakyVercel.scrapeGoogleNews.bind(flakyVercel)
+    let newsAttempts = 0
+    flakyVercel.scrapeGoogleNews = async (query, options) => {
+      newsAttempts++
+      if (newsAttempts < 3) {
+        throw new Error('rate limit 429 — please retry')
+      }
+      return originalScrape(query, options)
+    }
+
+    const result = await processProfilerJob(
+      makeJob({ leadId, orgId: PROFILER_ORG_A }),
+      makeCtx(PROFILER_ORG_A),
+      { vercel: flakyVercel, retryBackoffBaseMs: 1, retryMaxAttempts: 3 },
+    )
+
+    // withTransientRetry: attempt 1 fail, attempt 2 fail, attempt 3 OK.
+    expect(newsAttempts).toBe(3)
+    expect(result.status).toBe('enriched')
+    expect(result.successfulSources).toContain('news')
+    expect(result.failedSources).toEqual([])
+  })
+
+  it('ALL 3 sources fail → leads.status reverts, dossier deleted, Slack notify', async () => {
+    resetMockSlackSends()
+
+    // Configure org with a Slack webhook URL so the notify path runs.
+    const db = getServiceClient()
+    await db
+      .update(orgs)
+      .set({ slackWebhookUrl: 'https://hooks.slack.com/mock/profiler-test' })
+      .where(eq(orgs.id, PROFILER_ORG_A))
+
+    const leadId = await createLead({
+      orgId: PROFILER_ORG_A,
+      icpId: ICP_PROFILER_SAAS,
+      fullName: 'Sarah Chen',
+      firstName: 'Sarah',
+      lastName: 'Chen',
+      company: 'Pulse Analytics',
+      role: 'Founder',
+      companyDomain: 'pulseanalytics.io',
+      linkedinUrl: 'https://linkedin.com/in/sarahchen',
+    })
+
+    const failingVercel = new VercelBrowserClient()
+    failingVercel.scrapeCompanyWebsite = async () => {
+      throw new Error('VERCEL_AUTH_FAILED: invalid api key')
+    }
+    failingVercel.scrapeGoogleNews = async () => {
+      throw new Error('VERCEL_AUTH_FAILED: invalid api key')
+    }
+    const failingApify = new ApifyClient()
+    failingApify.scrapeLinkedinProfile = async () => {
+      throw new Error('APIFY_AUTH_FAILED: invalid token')
+    }
+    failingApify.scrapeLinkedinPosts = async () => {
+      throw new Error('APIFY_AUTH_FAILED: invalid token')
+    }
+
+    // Capture Slack sends via the SlackWebhookClient override.
+    const slack = new SlackWebhookClient('https://hooks.slack.com/mock/profiler-test')
+
+    let caught: unknown
+    try {
+      await processProfilerJob(
+        makeJob({ leadId, orgId: PROFILER_ORG_A }),
+        makeCtx(PROFILER_ORG_A),
+        {
+          vercel: failingVercel,
+          apify: failingApify,
+          slack,
+          retryBackoffBaseMs: 1,
+        },
+      )
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(Error)
+
+    const [lead] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadId))
+    expect(lead?.status).toBe('discovered')
+
+    const dossiers = await db
+      .select()
+      .from(leadDossiersTable)
+      .where(eq(leadDossiersTable.leadId, leadId))
+    expect(dossiers).toHaveLength(0)
+
+    // Slack notify fired once with Profiler-flavored failure header.
+    expect(MOCK_SLACK_SENDS.length).toBeGreaterThanOrEqual(1)
+    const profilerSend = MOCK_SLACK_SENDS.find((s) =>
+      s.text.includes('Profiler failure'),
+    )
+    expect(profilerSend).toBeDefined()
+  })
+})
+
+// ─── 21. Sprint 6b — Synthesis dedupe edge ──────────────────────────
+
+describe('Profiler — synthesis dedupe (Sprint 6b)', () => {
+  it('Sarah Series A: 3 sources mention same fact → 1 hook with concatenated evidence', async () => {
+    // Drive the worker so we get the curated MOCK_SYNTHESIS_DOSSIERS entry
+    // for pulseanalytics.io, which has the Series A hook explicitly dedup'd
+    // with cross-source evidence joined by " | ".
+    const leadId = await createLead({
+      orgId: PROFILER_ORG_A,
+      icpId: ICP_PROFILER_SAAS,
+      fullName: 'Sarah Chen',
+      firstName: 'Sarah',
+      lastName: 'Chen',
+      company: 'Pulse Analytics',
+      role: 'Founder',
+      companyDomain: 'pulseanalytics.io',
+      linkedinUrl: 'https://linkedin.com/in/sarahchen',
+    })
+
+    await processProfilerJob(
+      makeJob({ leadId, orgId: PROFILER_ORG_A }),
+      makeCtx(PROFILER_ORG_A),
+    )
+
+    const db = getServiceClient()
+    const [dossier] = await db
+      .select()
+      .from(leadDossiersTable)
+      .where(eq(leadDossiersTable.leadId, leadId))
+    const synthesis = (dossier?.rawSignals as { synthesis?: { hookCandidates?: Array<{ hook: string; evidence: string }> } }).synthesis
+    expect(synthesis).toBeDefined()
+
+    // Series A hook present exactly once (raw extractions had it from 3
+    // sources; synthesis dedupes).
+    const seriesAHooks = synthesis?.hookCandidates?.filter((h) =>
+      h.hook.toLowerCase().includes('series a'),
+    )
+    expect(seriesAHooks?.length).toBe(1)
+    // Evidence concatenates all 3 source quotes via the " | " separator
+    // documented in PROFILER_SYNTHESIS_PROMPT.
+    const seriesAEvidence = seriesAHooks?.[0]?.evidence ?? ''
+    expect(seriesAEvidence).toContain('[news]')
+    expect(seriesAEvidence).toContain('[linkedin]')
+    expect(seriesAEvidence).toContain('[company_website]')
+    expect(seriesAEvidence.split(' | ').length).toBeGreaterThanOrEqual(2)
+  })
+})
+
+// ─── 22. Sprint 6b — evidence_urls populated ────────────────────────
+
+describe('Profiler — evidence_urls populated (Sprint 6b)', () => {
+  it('evidence_urls jsonb has entries with hookId/url/sourceType/capturedAt across 3 source types', async () => {
+    const leadId = await createLead({
+      orgId: PROFILER_ORG_A,
+      icpId: ICP_PROFILER_SAAS,
+      fullName: 'Sarah Chen',
+      firstName: 'Sarah',
+      lastName: 'Chen',
+      company: 'Pulse Analytics',
+      role: 'Founder',
+      companyDomain: 'pulseanalytics.io',
+      linkedinUrl: 'https://linkedin.com/in/sarahchen',
+    })
+
+    await processProfilerJob(
+      makeJob({ leadId, orgId: PROFILER_ORG_A }),
+      makeCtx(PROFILER_ORG_A),
+    )
+
+    const db = getServiceClient()
+    const [dossier] = await db
+      .select()
+      .from(leadDossiersTable)
+      .where(eq(leadDossiersTable.leadId, leadId))
+    const evidenceUrls = dossier?.evidenceUrls as Array<{
+      hookId: string
+      url: string
+      capturedAt: string
+      sourceType: 'company_website' | 'linkedin' | 'news'
+    }>
+
+    // Each hook above the SCREENSHOT_CONFIDENCE_THRESHOLD (0.7) gets a
+    // screenshot. Sarah's curated extractions yield 5 such hooks.
+    expect(evidenceUrls.length).toBeGreaterThanOrEqual(3)
+
+    // Each entry shape: uuid hookId, mock-storage URL, ISO capturedAt.
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    for (const entry of evidenceUrls) {
+      expect(entry.hookId).toMatch(uuidRe)
+      expect(entry.url).toContain('mock-storage.spleed.ai')
+      expect(entry.url).toContain(`/evidence/${PROFILER_ORG_A}/${leadId}/`)
+      expect(entry.url).toContain(`${entry.hookId}-${entry.sourceType}.png`)
+      // ISO 8601 — must parse to a valid Date.
+      expect(Number.isNaN(new Date(entry.capturedAt).getTime())).toBe(false)
+    }
+
+    // All 3 source types represented.
+    const sourceTypes = new Set(evidenceUrls.map((e) => e.sourceType))
+    expect(sourceTypes).toEqual(new Set(['company_website', 'linkedin', 'news']))
+  })
+})
+
+// ─── 23. Sprint 6b — Cross-org evidence_urls isolation ──────────────
+
+describe('Profiler — multi-tenant evidence_urls (Sprint 6b)', () => {
+  it('Org A evidence_urls invisible from Org B-scoped lead_dossiers query', async () => {
+    const leadAId = await createLead({
+      orgId: PROFILER_ORG_A,
+      icpId: ICP_PROFILER_SAAS,
+      fullName: 'Sarah Chen',
+      firstName: 'Sarah',
+      lastName: 'Chen',
+      company: 'Pulse Analytics',
+      role: 'Founder',
+      companyDomain: 'pulseanalytics.io',
+      linkedinUrl: 'https://linkedin.com/in/sarahchen',
+    })
+
+    await processProfilerJob(
+      makeJob({ leadId: leadAId, orgId: PROFILER_ORG_A }),
+      makeCtx(PROFILER_ORG_A),
+    )
+
+    const db = getServiceClient()
+    // Org A dossier exists with populated evidence_urls.
+    const [dossierA] = await db
+      .select()
+      .from(leadDossiersTable)
+      .where(eq(leadDossiersTable.orgId, PROFILER_ORG_A))
+    expect((dossierA?.evidenceUrls as unknown[]).length).toBeGreaterThan(0)
+
+    // Org B-scoped query returns zero rows — RLS at the lead_dossiers
+    // row-level cuts evidence_urls jsonb visibility along with the row.
+    const dossiersFromB = await db
+      .select()
+      .from(leadDossiersTable)
+      .where(eq(leadDossiersTable.orgId, PROFILER_ORG_B))
+    expect(dossiersFromB).toHaveLength(0)
+  })
+})
+
+// ─── 24. Sprint 6b — Apify mock determinism ─────────────────────────
+
+describe('ApifyClient — mock determinism (Sprint 6b)', () => {
+  it('same LinkedIn URL → identical profile + posts payload across calls', async () => {
+    const apify = new ApifyClient()
+    const url = 'https://linkedin.com/in/sarahchen'
+
+    const p1 = await apify.scrapeLinkedinProfile(url)
+    const p2 = await apify.scrapeLinkedinProfile(url)
+    expect(p1.profile.fullName).toBe(p2.profile.fullName)
+    expect(p1.profile.headline).toBe(p2.profile.headline)
+    expect(p1.profile.experience).toEqual(p2.profile.experience)
+    expect(p1.profile.skills).toEqual(p2.profile.skills)
+    expect(p1.metadata.profileUrl).toBe(p2.metadata.profileUrl)
+    expect(p1.costUsd).toBe(p2.costUsd)
+
+    const posts1 = await apify.scrapeLinkedinPosts(url, { limit: 5 })
+    const posts2 = await apify.scrapeLinkedinPosts(url, { limit: 5 })
+    expect(posts1.posts.length).toBe(posts2.posts.length)
+    expect(posts1.posts[0]?.id).toBe(posts2.posts[0]?.id)
+    expect(posts1.posts[0]?.content).toBe(posts2.posts[0]?.content)
+    expect(posts1.costUsd).toBe(posts2.costUsd)
   })
 })

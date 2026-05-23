@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./apollo": "./src/apollo/index.ts",
     "./anthropic": "./src/anthropic/index.ts",
+    "./apify": "./src/apify/index.ts",
     "./slack": "./src/slack/index.ts",
     "./vercel-browser": "./src/vercel-browser/index.ts"
   },

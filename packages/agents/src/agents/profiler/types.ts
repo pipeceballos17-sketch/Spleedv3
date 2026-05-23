@@ -10,11 +10,14 @@
  */
 
 import type {
+  AnthropicClient,
   CompanyStage,
   ExtractedCompanyWebsiteSignals,
+  IcpShape,
+  ProfilerSourceName,
 } from '@spleed/integrations/anthropic'
 
-export type { CompanyStage }
+export type { CompanyStage, ProfilerSourceName }
 
 export interface CompanyWebsiteSignalsWithIds {
   company_stage: ExtractedCompanyWebsiteSignals['company_stage']
@@ -54,4 +57,63 @@ export interface LeadShape {
   companyDomain?: string | null
   email?: string | null
   linkedinUrl?: string | null
+}
+
+// ─── Sprint 6b — LinkedIn + News extraction + Synthesis ────────────
+
+/**
+ * Per-source extraction result. LinkedIn and news extractions share the
+ * same shape as Sprint 6a's company-website extraction
+ * (ProfilerCompanyWebsiteExtractionResult); these aliases name the shape
+ * at call sites for readability. Sprint 7+ may diverge per-source types
+ * if source-specific fields are added (e.g. LinkedIn connection graph).
+ */
+export type LinkedinExtractionResult = ProfilerCompanyWebsiteExtractionResult
+export type NewsExtractionResult = ProfilerCompanyWebsiteExtractionResult
+
+/**
+ * Hook with primary-source attribution, emitted by synthesis. Mirror of
+ * @spleed/integrations/anthropic.SynthesizedHookCandidate with a fresh
+ * hookId stamped by the agent layer (so dossier.evidence_urls entries
+ * can correlate back to the synthesis dossier even when the original
+ * extraction-layer hookIds were rolled up).
+ */
+export interface SynthesizedHookCandidateWithId {
+  hookId: string
+  hook: string
+  evidence: string
+  sourceName: ProfilerSourceName
+  confidence: number
+}
+
+/**
+ * Synthesis input from the worker's POV. One entry per successful source
+ * extraction; the worker filters out failed sources before passing.
+ */
+export interface SynthesisSourceInput {
+  sourceName: ProfilerSourceName
+  signals: CompanyWebsiteSignalsWithIds
+}
+
+export interface SynthesisInput {
+  sources: SynthesisSourceInput[]
+  /** True when sources.length < 3 (1 or 2 sources only). */
+  partialEnrichment: boolean
+  /** Source names that failed extraction. Empty when partialEnrichment=false. */
+  missingSources: ProfilerSourceName[]
+  lead: LeadShape
+  icp: IcpShape
+  anthropicClient: AnthropicClient
+}
+
+export interface SynthesizedDossier {
+  hookCandidates: SynthesizedHookCandidateWithId[]
+  recommendedAngle: string
+  painInferred: string
+  /** 0-1, scaled down for partial enrichment per PROFILER_SYNTHESIS_PROMPT rules. */
+  confidenceScore: number
+  tokensIn: number
+  tokensOut: number
+  costUsd: number
+  latencyMs: number
 }

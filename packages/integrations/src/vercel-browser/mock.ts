@@ -21,10 +21,28 @@
  *   - Signal density: ranges from rich (pulseanalytics) to sparse (wallacesteel)
  */
 
-import type { CompanyWebsiteScrapeResult } from './types'
+import type {
+  AnnotatedScreenshotResult,
+  CompanyWebsiteScrapeResult,
+  GoogleNewsScrapeResult,
+  NewsArticle,
+  TakeAnnotatedScreenshotInput,
+} from './types'
 
 const COST_PER_SCRAPE_USD = 0.003
+const COST_PER_NEWS_SCRAPE_USD = 0.002
+const COST_PER_SCREENSHOT_USD = 0.001
 const CREDITS_PER_SCRAPE = 1
+
+/**
+ * Stable reference epoch — matches Apify mock (2026-05-15T12:00:00Z).
+ * Aligning the two mocks lets a single test reason about relative dates
+ * across LinkedIn posts and news articles without drift between runs.
+ */
+const REFERENCE_NOW = new Date('2026-05-15T12:00:00Z').getTime()
+function daysAgoIso(days: number): string {
+  return new Date(REFERENCE_NOW - days * 24 * 60 * 60 * 1000).toISOString()
+}
 
 /**
  * Domain → curated scrape result. Lookups normalize to lowercase. Unknown
@@ -207,3 +225,200 @@ export function synthesizeUnknownDomain(domain: string): CompanyWebsiteScrapeRes
 }
 
 export { MOCK_COMPANY_WEBSITES, COST_PER_SCRAPE_USD, CREDITS_PER_SCRAPE }
+
+// ─── Sprint 6b — Google News mock articles per company ─────────────
+
+/**
+ * Curated news articles keyed by company domain. Aligned with the
+ * pageContent fixtures above and the LinkedIn posts in @spleed/integrations
+ * /apify/mock.ts so a single profiling run produces a coherent cross-source
+ * narrative (e.g. Sarah Chen's Series A appears in company website news +
+ * LinkedIn post + TechCrunch article — synthesis should dedupe to 1 hook).
+ *
+ * Mock matches normalize lowercase domain (handles both "pulseanalytics.io"
+ * and "https://pulseanalytics.io/" inputs).
+ */
+const MOCK_NEWS_ARTICLES: Record<string, NewsArticle[]> = {
+  'pulseanalytics.io': [
+    {
+      title: 'Pulse Analytics raises $14M Series A led by Costanoa Ventures',
+      url: 'https://techcrunch.com/2025/07/pulse-analytics-series-a',
+      source: 'TechCrunch',
+      publishedAt: daysAgoIso(310), // ~July 2025 vs ref May 2026
+      snippet:
+        'The B2B product analytics startup founded by ex-Segment PM Sarah Chen closed a $14M Series A led by Costanoa Ventures, with participation from Y Combinator and angel investors from Stripe and Notion.',
+      relevanceScore: 0.94,
+    },
+    {
+      title: 'Why product analytics needs a rethink for B2B SaaS, per Pulse founder',
+      url: 'https://saastr.com/articles/pulse-analytics-founder-interview',
+      source: 'SaaStr',
+      publishedAt: daysAgoIso(35),
+      snippet:
+        'Sarah Chen sits down with SaaStr to discuss why the current product analytics stack — Mixpanel plus Heap plus a warehouse — fails for product-led growth teams.',
+      relevanceScore: 0.81,
+    },
+  ],
+  'mosaicinbox.com': [
+    {
+      title: 'Mosaic Inbox launches beta to unify support channels for early-stage startups',
+      url: 'https://producthunt.com/posts/mosaic-inbox',
+      source: 'Product Hunt',
+      publishedAt: daysAgoIso(72),
+      snippet:
+        'Mosaic Inbox, a unified support inbox built by ex-Lattice support lead Priya Iyer, launched its beta. Eight design partners signed on.',
+      relevanceScore: 0.78,
+    },
+  ],
+  'colegiosanandres.edu.co': [
+    {
+      title: 'Colegio San Andrés firma convenio con Universidad EAFIT para articulación académica',
+      url: 'https://elcolombiano.com/educacion/colegio-san-andres-eafit',
+      source: 'El Colombiano',
+      publishedAt: daysAgoIso(58),
+      snippet:
+        'El convenio crea una ruta directa para graduados de Colegio San Andrés hacia los programas de Universidad EAFIT en Medellín.',
+      relevanceScore: 0.87,
+    },
+    {
+      title: '14 estudiantes de Colegio San Andrés reciben becas internacionales en 2025',
+      url: 'https://semana.com/educacion/becas-san-andres-2025',
+      source: 'Semana',
+      publishedAt: daysAgoIso(140),
+      snippet:
+        'Los estudiantes serán recibidos por universidades en Estados Unidos, Canadá, y España gracias al programa de preparación universitaria del colegio.',
+      relevanceScore: 0.7,
+    },
+  ],
+  'andeanfactoring.co': [
+    {
+      title: 'Andean Factoring asegura línea de crédito con Bancolombia por $50.000 millones',
+      url: 'https://larepublica.co/finanzas/andean-factoring-bancolombia',
+      source: 'La República',
+      publishedAt: daysAgoIso(120),
+      snippet:
+        'La línea permitirá ampliar las operaciones de factoring de Andean Factoring hacia el Eje Cafetero, atendiendo PYMES textiles y agroindustriales.',
+      relevanceScore: 0.86,
+    },
+  ],
+  'careloophealth.com': [
+    {
+      title: 'CareLoop Health closes $42M Series B led by General Catalyst',
+      url: 'https://fiercehealthcare.com/health-tech/careloop-series-b',
+      source: 'Fierce Healthcare',
+      publishedAt: daysAgoIso(185), // ~Nov 2025
+      snippet:
+        'CareLoop Health raised $42M Series B led by General Catalyst with participation from a16z Bio, bringing total funding to $58M.',
+      relevanceScore: 0.91,
+    },
+    {
+      title: 'Atrium Health partners with CareLoop to expand post-discharge care across the Carolinas',
+      url: 'https://beckershospitalreview.com/healthcare/atrium-careloop-partnership',
+      source: "Becker's Hospital Review",
+      publishedAt: daysAgoIso(8),
+      snippet:
+        'Atrium Health is rolling out CareLoop\'s post-acute coordination platform across 12 of its hospitals in North and South Carolina.',
+      relevanceScore: 0.89,
+    },
+  ],
+  'halocreative.co': [
+    {
+      title: 'Halo Creative wins Trove Insurance account from Mekanism',
+      url: 'https://adweek.com/agencyspy/halo-trove-win',
+      source: 'Adweek',
+      publishedAt: daysAgoIso(12),
+      snippet:
+        'San Francisco brand-and-paid agency Halo Creative has won the Trove Insurance account from incumbent Mekanism following a competitive review.',
+      relevanceScore: 0.85,
+    },
+  ],
+  // Wallace Steel: no news — graceful empty path
+  'wallacesteel.com': [],
+}
+
+/**
+ * Normalize a Google News query for mock lookup. Real Profiler passes
+ * the full company name + domain; mock keys are bare domain strings.
+ */
+function normalizeNewsKey(query: string): string {
+  const lower = query.toLowerCase()
+  // Crude: search for any known domain substring in the query. Real Google
+  // News parses the query itself; mock just needs deterministic mapping.
+  for (const key of Object.keys(MOCK_NEWS_ARTICLES)) {
+    if (lower.includes(key)) return key
+  }
+  // Fallback: strip non-alphanumerics, see if remaining matches.
+  const stripped = lower.replace(/[^a-z0-9.]/g, '').replace(/^https?/, '')
+  for (const key of Object.keys(MOCK_NEWS_ARTICLES)) {
+    if (stripped.includes(key.replace('.', ''))) return key
+  }
+  return ''
+}
+
+/**
+ * Mock Google News scrape. Filters by daysBack + maxResults like the real
+ * agent-browser-driven scrape would.
+ */
+export function mockScrapeGoogleNews(
+  query: string,
+  options: { daysBack?: number; maxResults?: number } = {},
+): GoogleNewsScrapeResult {
+  const key = normalizeNewsKey(query)
+  const all = MOCK_NEWS_ARTICLES[key] ?? []
+  const daysBack = options.daysBack ?? 90
+  const cutoff = REFERENCE_NOW - daysBack * 24 * 60 * 60 * 1000
+  const filtered = all.filter((a) => new Date(a.publishedAt).getTime() >= cutoff)
+  const maxResults = options.maxResults ?? 10
+  const sliced = filtered.slice(0, maxResults)
+  return {
+    articles: sliced,
+    metadata: {
+      query,
+      resultsCount: sliced.length,
+      scrapedAt: new Date(REFERENCE_NOW).toISOString(),
+    },
+    costUsd: COST_PER_NEWS_SCRAPE_USD,
+  }
+}
+
+// ─── Sprint 6b — Annotated screenshot mock ─────────────────────────
+
+/**
+ * 1×1 transparent PNG. 67 bytes total, minimum-valid file the agent-browser
+ * would emit for a successful but uninteresting capture. Sprint 7+ live
+ * mode replaces this with the actual screenshot from the agent-browser
+ * session. Bytes are hand-verified valid PNG (IHDR + IDAT + IEND chunks).
+ */
+const ONE_BY_ONE_PNG = Buffer.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+  0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+  0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41,
+  0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+  0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00,
+  0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+  0x42, 0x60, 0x82,
+])
+
+/**
+ * Deterministic mock screenshot. Returns a tiny valid PNG so callers can
+ * round-trip the bytes through Supabase Storage logic (size/mime checks)
+ * without truly rendering a page. Cost recorded for cost_events parity.
+ */
+export function mockTakeAnnotatedScreenshot(
+  _input: TakeAnnotatedScreenshotInput,
+): AnnotatedScreenshotResult {
+  return {
+    imageBytes: ONE_BY_ONE_PNG,
+    mimeType: 'image/png',
+    costUsd: COST_PER_SCREENSHOT_USD,
+  }
+}
+
+export {
+  MOCK_NEWS_ARTICLES,
+  COST_PER_NEWS_SCRAPE_USD,
+  COST_PER_SCREENSHOT_USD,
+  ONE_BY_ONE_PNG,
+}

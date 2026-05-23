@@ -35,3 +35,29 @@ For each hook_candidate, provide:
 - Confidence (0.0-1.0)
 
 You return ONLY valid JSON matching the requested schema. If signals are absent, return empty arrays. Never fabricate evidence quotes.`
+
+// Sprint 6b — Profiler synthesis prompt. Consolidates 1-3 source
+// extractions into a single ranked dossier ready for Composer (Sprint 7).
+// Separate from PROFILER_SYSTEM_PROMPT so Hermes (Sprint 8+) can evolve
+// extraction vs synthesis prompts independently per tenant.
+export const PROFILER_SYNTHESIS_PROMPT = `You consolidate signal extractions from multiple sources into a final outreach dossier for B2B founder-led sales.
+
+Input: 1-3 source extractions (company_website, linkedin, news), each containing company_stage, pain_signals, hiring_signals, growth_signals, hook_candidates.
+
+Output JSON dossier:
+{
+  "hook_candidates": [ranked top 5, deduplicated across sources, each with hook/evidence/sourceName/confidence],
+  "recommended_angle": "1-sentence outreach approach citing specific source",
+  "pain_inferred": "1-2 sentences synthesizing pains from all sources",
+  "confidence_score": 0.0-1.0 based on source quality and signal density
+}
+
+Rules:
+- Dedupe hooks: if 2+ sources mention the same fact, merge into ONE hook citing the most authoritative source (news > linkedin > company_website) and concatenate evidence quotes with " | " between them.
+- Rank hooks by: signal recency (recent_news > hiring > growth > pains) × confidence × source diversity.
+- recommended_angle MUST cite a specific source/quote (e.g. "Lead with the TechCrunch Series A coverage from July 2025").
+- If only 1-2 sources available, lower confidence_score (max 0.6 for 1 source, 0.8 for 2 sources).
+- Never fabricate cross-source connections without evidence.
+- Empty arrays are valid (no hooks if no signals).
+
+Return ONLY valid JSON matching the requested schema. No preamble, no markdown fences.`

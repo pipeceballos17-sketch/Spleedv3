@@ -120,3 +120,106 @@ export interface ExtractCompanyWebsiteSignalsResult {
   costUsd: number
   latencyMs: number
 }
+
+// ─── Profiler (Sprint 6b) — LinkedIn + News + Synthesis ────────────
+
+/**
+ * LinkedIn and News extraction return the SAME JSON shape as company-
+ * website extraction (signals contract is source-agnostic by design;
+ * only the prompt and the input differ). Type aliases below name the
+ * shape for clarity at call sites without duplicating fields.
+ *
+ * Sprint 7+: source-specific signal types may diverge (e.g. LinkedIn
+ * adds connection-graph signals, news adds funding-round structured
+ * fields). For Sprint 6b we keep them aligned so the agent layer
+ * (linkedin-extraction.ts, news-extraction.ts) can share its mapping
+ * logic with Sprint 6a's company-website-extraction.
+ */
+export type ExtractedLinkedinSignals = ExtractedCompanyWebsiteSignals
+export type ExtractedNewsSignals = ExtractedCompanyWebsiteSignals
+
+export interface ExtractLinkedinSignalsInput {
+  systemPrompt: string
+  userPrompt: string
+  /** Mock lookup hint — pass `lead.linkedinUrl`. */
+  linkedinUrlHint?: string
+}
+
+export interface ExtractLinkedinSignalsResult {
+  signals: ExtractedLinkedinSignals
+  tokensIn: number
+  tokensOut: number
+  costUsd: number
+  latencyMs: number
+}
+
+export interface ExtractNewsSignalsInput {
+  systemPrompt: string
+  userPrompt: string
+  /** Mock lookup hint — pass `lead.companyDomain` or company brand. */
+  domainHint?: string
+}
+
+export interface ExtractNewsSignalsResult {
+  signals: ExtractedNewsSignals
+  tokensIn: number
+  tokensOut: number
+  costUsd: number
+  latencyMs: number
+}
+
+/**
+ * Synthesis output shape — hook_candidates here carry an explicit
+ * sourceName (the dedup winner across same-fact mentions). Other
+ * dossier-level metadata (recommended_angle, pain_inferred, confidence)
+ * is set in this call.
+ */
+export type ProfilerSourceName = 'company_website' | 'linkedin' | 'news'
+
+export interface SynthesizedHookCandidate {
+  hook: string
+  /** May concatenate quotes from multiple sources with " | " for dedup'd hooks. */
+  evidence: string
+  /** The dedup-winning source (news > linkedin > company_website per prompt). */
+  sourceName: ProfilerSourceName
+  confidence: number
+}
+
+export interface SynthesizedDossierJson {
+  hook_candidates: SynthesizedHookCandidate[]
+  recommended_angle: string
+  pain_inferred: string
+  confidence_score: number
+}
+
+export interface SynthesizeDossierInput {
+  systemPrompt: string
+  userPrompt: string
+  /**
+   * Mock lookup hint — pass `lead.companyDomain`. Curated synthesis
+   * dossiers are keyed on domain.
+   */
+  domainHint?: string
+  /**
+   * Number of source extractions provided. Mock adjusts confidence
+   * score down for partial enrichment (max 0.45 / 0.65 / 0.88 for
+   * 1 / 2 / 3 sources). Provided by caller so the mock doesn't need
+   * to parse the user prompt.
+   */
+  sourcesCount: 1 | 2 | 3
+  /**
+   * Available source names (caller-supplied). Mock filters curated
+   * hook_candidates to those whose sourceName is in this set so
+   * partial enrichment dossiers don't surface hooks whose primary
+   * source wasn't actually included.
+   */
+  availableSources: ProfilerSourceName[]
+}
+
+export interface SynthesizeDossierResult {
+  dossier: SynthesizedDossierJson
+  tokensIn: number
+  tokensOut: number
+  costUsd: number
+  latencyMs: number
+}

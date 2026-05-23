@@ -1,19 +1,37 @@
 import {
   mockExtractCompanyWebsiteSignals,
+  mockExtractLinkedinSignals,
+  mockExtractNewsSignals,
   mockLatencyMs,
+  mockLinkedinLatencyMs,
+  mockNewsLatencyMs,
   mockProfilerLatencyMs,
   mockScoreLead,
+  mockSynthesisLatencyMs,
+  mockSynthesizeDossier,
+  MOCK_LINKEDIN_TOKENS_IN,
+  MOCK_LINKEDIN_TOKENS_OUT,
+  MOCK_NEWS_TOKENS_IN,
+  MOCK_NEWS_TOKENS_OUT,
   MOCK_PROFILER_TOKENS_IN,
   MOCK_PROFILER_TOKENS_OUT,
+  MOCK_SYNTHESIS_TOKENS_IN,
+  MOCK_SYNTHESIS_TOKENS_OUT,
   MOCK_TOKENS_IN,
   MOCK_TOKENS_OUT,
 } from './mock'
 import type {
   ExtractCompanyWebsiteSignalsInput,
   ExtractCompanyWebsiteSignalsResult,
+  ExtractLinkedinSignalsInput,
+  ExtractLinkedinSignalsResult,
+  ExtractNewsSignalsInput,
+  ExtractNewsSignalsResult,
   ScoreLeadInput,
   ScoreLeadResult,
   ScoutLlmModel,
+  SynthesizeDossierInput,
+  SynthesizeDossierResult,
 } from './types'
 
 export interface AnthropicClientConfig {
@@ -175,6 +193,121 @@ export class AnthropicClient {
     // fall back to EMPTY_SIGNALS on parse failure.
     throw new Error(
       '[anthropic] live mode not implemented in Sprint 6a — wire real client in Sprint 7+ with BYOK (BACKLOG-027)',
+    )
+  }
+
+  // ─── Profiler (Sprint 6b) — LinkedIn + News + Synthesis ──────────
+
+  /**
+   * Extract structured signals from a LinkedIn profile + recent posts.
+   * Caller (agents linkedin-extraction.ts) builds both prompts and
+   * passes linkedinUrlHint so the mock can look up curated signals
+   * deterministically.
+   */
+  async extractLinkedinSignals(
+    input: ExtractLinkedinSignalsInput,
+  ): Promise<ExtractLinkedinSignalsResult> {
+    if (this.mockMode) {
+      return this.extractLinkedinSignalsMock(input)
+    }
+    return this.extractLinkedinSignalsLive(input)
+  }
+
+  /**
+   * Extract structured signals from a set of news articles. Caller
+   * (agents news-extraction.ts) builds prompts and passes domainHint.
+   */
+  async extractNewsSignals(
+    input: ExtractNewsSignalsInput,
+  ): Promise<ExtractNewsSignalsResult> {
+    if (this.mockMode) {
+      return this.extractNewsSignalsMock(input)
+    }
+    return this.extractNewsSignalsLive(input)
+  }
+
+  /**
+   * Consolidate 1-3 source extractions into the final ranked dossier.
+   * sourcesCount + availableSources let the mock adjust output for
+   * partial-enrichment scenarios; live mode (Sprint 7+) reads the same
+   * info from the user prompt itself.
+   */
+  async synthesizeDossier(
+    input: SynthesizeDossierInput,
+  ): Promise<SynthesizeDossierResult> {
+    if (this.mockMode) {
+      return this.synthesizeDossierMock(input)
+    }
+    return this.synthesizeDossierLive(input)
+  }
+
+  // ─── Mock implementations (Sprint 6b) ─────────────────────────────
+
+  private async extractLinkedinSignalsMock(
+    input: ExtractLinkedinSignalsInput,
+  ): Promise<ExtractLinkedinSignalsResult> {
+    const signals = mockExtractLinkedinSignals({
+      linkedinUrlHint: input.linkedinUrlHint,
+    })
+    const tokensIn = MOCK_LINKEDIN_TOKENS_IN
+    const tokensOut = MOCK_LINKEDIN_TOKENS_OUT
+    const latencyHint = input.linkedinUrlHint ?? `len-${input.userPrompt.length}`
+    const latencyMs = mockLinkedinLatencyMs(latencyHint)
+    const costUsd = computeCostUsd(this.model, tokensIn, tokensOut)
+    return { signals, tokensIn, tokensOut, costUsd, latencyMs }
+  }
+
+  private async extractNewsSignalsMock(
+    input: ExtractNewsSignalsInput,
+  ): Promise<ExtractNewsSignalsResult> {
+    const signals = mockExtractNewsSignals({ domainHint: input.domainHint })
+    const tokensIn = MOCK_NEWS_TOKENS_IN
+    const tokensOut = MOCK_NEWS_TOKENS_OUT
+    const latencyHint = input.domainHint ?? `len-${input.userPrompt.length}`
+    const latencyMs = mockNewsLatencyMs(latencyHint)
+    const costUsd = computeCostUsd(this.model, tokensIn, tokensOut)
+    return { signals, tokensIn, tokensOut, costUsd, latencyMs }
+  }
+
+  private async synthesizeDossierMock(
+    input: SynthesizeDossierInput,
+  ): Promise<SynthesizeDossierResult> {
+    const dossier = mockSynthesizeDossier({
+      domainHint: input.domainHint,
+      sourcesCount: input.sourcesCount,
+      availableSources: input.availableSources,
+    })
+    const tokensIn = MOCK_SYNTHESIS_TOKENS_IN
+    const tokensOut = MOCK_SYNTHESIS_TOKENS_OUT
+    const latencyHint = input.domainHint ?? `synth-len-${input.userPrompt.length}`
+    const latencyMs = mockSynthesisLatencyMs(latencyHint)
+    const costUsd = computeCostUsd(this.model, tokensIn, tokensOut)
+    return { dossier, tokensIn, tokensOut, costUsd, latencyMs }
+  }
+
+  // ─── Live stubs (Sprint 6b — defer to Sprint 7+) ───────────────────
+
+  private async extractLinkedinSignalsLive(
+    _input: ExtractLinkedinSignalsInput,
+  ): Promise<ExtractLinkedinSignalsResult> {
+    throw new Error(
+      '[anthropic] live mode not implemented in Sprint 6b — wire real client in Sprint 7+ with BYOK (BACKLOG-027)',
+    )
+  }
+
+  private async extractNewsSignalsLive(
+    _input: ExtractNewsSignalsInput,
+  ): Promise<ExtractNewsSignalsResult> {
+    throw new Error(
+      '[anthropic] live mode not implemented in Sprint 6b — wire real client in Sprint 7+ with BYOK (BACKLOG-027)',
+    )
+  }
+
+  private async synthesizeDossierLive(
+    _input: SynthesizeDossierInput,
+  ): Promise<SynthesizeDossierResult> {
+    throw new Error(
+      '[anthropic] live mode not implemented in Sprint 6b — wire real client in Sprint 7+ with BYOK (BACKLOG-027)',
     )
   }
 }

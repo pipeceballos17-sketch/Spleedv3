@@ -1,5 +1,16 @@
-import type { CompanyWebsiteScrapeResult } from './types'
-import { mockScrapeCompanyWebsite, synthesizeUnknownDomain } from './mock'
+import type {
+  AnnotatedScreenshotResult,
+  CompanyWebsiteScrapeResult,
+  GoogleNewsScrapeOptions,
+  GoogleNewsScrapeResult,
+  TakeAnnotatedScreenshotInput,
+} from './types'
+import {
+  mockScrapeCompanyWebsite,
+  mockScrapeGoogleNews,
+  mockTakeAnnotatedScreenshot,
+  synthesizeUnknownDomain,
+} from './mock'
 
 export interface VercelBrowserClientConfig {
   /**
@@ -83,6 +94,58 @@ export class VercelBrowserClient {
     // toggling VERCEL_BROWSER_LIVE=true knows the live path isn't built.
     throw new Error(
       '[vercel-browser] live mode not implemented in Sprint 6a — wire real Vercel agent-browser in Sprint 7+ when concierge customers come online',
+    )
+  }
+
+  // ─── Sprint 6b — Google News + screenshots ─────────────────────────
+
+  /**
+   * Scrape Google News for recent articles matching the query. Profiler
+   * (Sprint 6b news-extraction) constructs queries like
+   * `"${lead.company}" OR site:${lead.companyDomain}` to get coverage
+   * for either the company brand or its web presence.
+   */
+  async scrapeGoogleNews(
+    query: string,
+    options: GoogleNewsScrapeOptions = {},
+  ): Promise<GoogleNewsScrapeResult> {
+    if (this.mockMode) {
+      return mockScrapeGoogleNews(query, options)
+    }
+    return this.scrapeGoogleNewsLive(query, options)
+  }
+
+  /**
+   * Capture an annotated screenshot of a specific page element (or full
+   * page if selector omitted). Used by Profiler's per-source helpers when
+   * a hook_candidate's confidence > 0.7 to attach visual evidence under
+   * lead_dossiers.evidence_urls (Sprint 6 Decision 5).
+   */
+  async takeAnnotatedScreenshot(
+    input: TakeAnnotatedScreenshotInput,
+  ): Promise<AnnotatedScreenshotResult> {
+    if (this.mockMode) {
+      return mockTakeAnnotatedScreenshot(input)
+    }
+    return this.takeAnnotatedScreenshotLive(input)
+  }
+
+  // ─── Live stubs (Sprint 6b — defer to Sprint 7+) ───────────────────
+
+  private async scrapeGoogleNewsLive(
+    _query: string,
+    _options: GoogleNewsScrapeOptions,
+  ): Promise<GoogleNewsScrapeResult> {
+    throw new Error(
+      '[vercel-browser] live mode not implemented in Sprint 6b — wire real Vercel agent-browser news scraping in Sprint 7+',
+    )
+  }
+
+  private async takeAnnotatedScreenshotLive(
+    _input: TakeAnnotatedScreenshotInput,
+  ): Promise<AnnotatedScreenshotResult> {
+    throw new Error(
+      '[vercel-browser] live mode not implemented in Sprint 6b — wire real Vercel agent-browser screenshot capture in Sprint 7+',
     )
   }
 }

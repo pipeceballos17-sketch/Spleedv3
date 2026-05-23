@@ -1852,6 +1852,107 @@ Per-tenant monthly budget caps configurable + hard pause cuando exceeded
 
 ---
 
+### BACKLOG-041: BYOK Apify integration (Phase 2 self-serve)
+
+**Status:** Deferred Sprint 13+ (Phase 2 self-serve onboarding)
+**Priority:** LOW
+**Origin:** Sprint 6b Decision 2 negotiation 2026-05-23
+
+**Context:**
+Sprint 6b ships Profiler con Apify managed credentials — single
+Spleed-owned token (env APIFY_TOKEN) shared across all tenants. This
+keeps Sprint 6b/MVP simple: no per-tenant credential UX, no Vault
+plumbing beyond what Sprint 1 already provides.
+
+Cuando Spleed transition to self-serve (Phase 2 Sprint 13+), power-user
+tenants (Pro+ tier) likely want BYOK Apify for:
+- Bypass shared rate limits (heavy enrichers hit Spleed's pool ceiling)
+- Cost transparency (tenant sees Apify charges directly on their bill,
+  not buried in Spleed's COGS)
+- Compliance (some enterprise tenants require credential ownership)
+
+**Implementation Sprint 13+:**
+- Onboarding step optional "Connect Apify" (dashboard settings page)
+- Vault per-tenant Apify key storage — reuse the BYOK Anthropic infra
+  pattern landing Sprint 7 (BACKLOG-027)
+- ApifyClient constructor reads `token` from Vault when present,
+  falls back to Spleed-managed token otherwise
+- Cost tracking differentiated: cost_events.metadata.byok=true for
+  tenant-paid Apify calls so dashboards can split COGS vs pass-through
+- Fallback logic: if tenant key expires or rate-limited, log warning +
+  optionally fail over to Spleed-managed (founder opt-in)
+
+**Dependencies:**
+- BACKLOG-027 BYOK Anthropic (Sprint 7) — reuse credential infra
+- BACKLOG-019 Dashboard MVP (Sprint 9-10) — settings UI surface
+- BACKLOG-040 Cost enforcement (Sprint 13-14) — BYOK changes cost
+  accounting semantics
+
+**Effort estimate:** ~3-4 días (UI step + Vault read + ApifyClient
+fallback + tests). Most plumbing already exists by Sprint 13 via
+BACKLOG-027's Anthropic pattern.
+
+---
+
+### BACKLOG-042: Supabase Storage 'evidence' bucket + RLS (Sprint 7+ prerequisite)
+
+**Status:** Sprint 7+ prerequisite — blocks STORAGE_LIVE=true
+**Priority:** ⭐ HIGH cuando Sprint 7+ live mode arranca
+**Origin:** Sprint 6b CP3 Storage decision (mock-mode synthesized URLs)
+
+**Context:**
+Sprint 6b Profiler captura annotated screenshots durante extraction y
+los persiste como `evidence_urls` jsonb en `lead_dossiers`. Para
+Sprint 6b/MVP, `uploadScreenshotsToStorage` mock-default produces
+deterministic URLs `https://mock-storage.spleed.ai/evidence/{orgId}/
+{leadId}/{hookId}-{sourceType}.png` — no real Storage interaction.
+
+Cuando Sprint 7+ enable live mode (`STORAGE_LIVE=true` flag, junto con
+APIFY_LIVE + VERCEL_BROWSER_LIVE + ANTHROPIC_LIVE para concierge
+customers), real Supabase Storage requires:
+
+1. **Bucket creation migration:**
+   - `INSERT INTO storage.buckets (id, name, public) VALUES ('evidence', 'evidence', false);`
+   - Bucket is private (no anon read). All access via authenticated
+     org_members + service_role.
+
+2. **RLS policies on storage.objects:**
+   - SELECT: org_members can read where path prefix matches their org_id.
+     Policy expression: `bucket_id = 'evidence' AND split_part(name, '/', 1) = (auth.jwt() ->> 'org_id')`
+   - INSERT: service_role only (worker writes). Members cannot upload
+     directly — Profiler worker is the sole writer.
+   - UPDATE/DELETE: service_role only.
+
+3. **Path convention enforcement (app layer):**
+   - Worker writes `evidence/{orgId}/{leadId}/{hookId}-{sourceType}.png`
+   - RLS uses `split_part(name, '/', 2)` to extract orgId (since path
+     starts with `evidence/` literal — adjust split index per layout)
+
+4. **uploadScreenshotsToStorage live wiring:**
+   - Switch `mockMode=false` branch from `throw` to
+     `supabase.storage.from('evidence').upload(path, imageBytes)`
+   - On 4xx from Storage (RLS denial), log + degrade dossier to
+     screenshot-less mode (still partial-success)
+
+5. **Coordinated env flag rollout:**
+   - `STORAGE_LIVE=true` must NOT precede this migration. Document
+     prereq in Sprint 7+ runbook.
+
+**Dependencies:**
+- Sprint 7+ concierge customer pipeline (otherwise no value to going live)
+- Vercel agent-browser live (real screenshots replace 1x1 PNG mock —
+  otherwise we'd be uploading 67-byte placeholders to real Storage)
+
+**Effort estimate:** ~1.5-2 días (migration + RLS + helper switch +
+RLS test in db package + 1-2 integration tests with real Storage)
+
+**CRITICAL:** This BACKLOG blocks `STORAGE_LIVE=true` in production.
+Until landed, every Sprint 6b screenshot path stays mocked. Sprint 7+
+live-mode runbook MUST verify migration applied + RLS policies active
+before flipping any LIVE flag in production env.
+
+---
+
 ## Cómo se mantiene este archivo
 
 - Cuando una decisión de producto se difiere conscientemente, se agrega aquí
