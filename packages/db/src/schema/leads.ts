@@ -5,6 +5,7 @@ import {
   timestamp,
   jsonb,
   boolean,
+  integer,
   real,
   index,
   uniqueIndex,
@@ -57,6 +58,12 @@ export const icps = pgTable(
 
     isActive: boolean('is_active').notNull().default(true),
 
+    // Sprint 7a — default-ICP flag for manual lead ingest (POST /api/leads/ingest).
+    // When a founder ingests a lead without specifying icpId, the API falls back
+    // to the org's default ICP. At most one default per org enforced by the
+    // partial unique index below.
+    isDefault: boolean('is_default').notNull().default(false),
+
     naturalLanguageUpdatedAt: timestamp('natural_language_updated_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -67,6 +74,11 @@ export const icps = pgTable(
   },
   (t) => ({
     orgActiveIdx: index('icps_org_active_idx').on(t.orgId, t.isActive),
+    // Sprint 7a — at most one default ICP per org. Partial unique index so
+    // non-default rows are unconstrained.
+    defaultPerOrgIdx: uniqueIndex('icps_default_per_org_idx')
+      .on(t.orgId)
+      .where(sql`is_default = true`),
   }),
 )
 
@@ -97,12 +109,15 @@ export const leads = pgTable(
 
     status: leadStatusEnum('status').notNull().default('discovered'),
 
-    // Identity
-    fullName: text('full_name').notNull(),
-    firstName: text('first_name').notNull(),
-    lastName: text('last_name').notNull(),
-    company: text('company').notNull(),
-    role: text('role').notNull(),
+    // Identity — Sprint 7a relaxed nullable. Manual lead ingest (POST
+    // /api/leads/ingest) creates leads from a URL alone, with identity
+    // fields populated by Profiler enrichment afterwards. Scout-created
+    // leads continue to populate all fields synchronously.
+    fullName: text('full_name'),
+    firstName: text('first_name'),
+    lastName: text('last_name'),
+    company: text('company'),
+    role: text('role'),
     companyDomain: text('company_domain'),
 
     // Channels — fixed columns (Decision d). Adding a new channel (e.g. bluesky)
@@ -136,6 +151,17 @@ export const leads = pgTable(
     // staleness when Profiler enrichment refreshes dossier signals.
     fitScoreComputedAt: timestamp('fit_score_computed_at', { withTimezone: true }),
     rawSignals: jsonb('raw_signals').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+
+    // Sprint 7a — manual ingest tracking. Distinct from `foundVia` (which
+    // names the original discovery flow); `ingestSource` tracks how each
+    // subsequent ingest event arrived. Free-text rather than enum so Sprint
+    // 7b+ can add 'slack_concierge' / 'cli' / 'webhook' without migration.
+    // Documented values: 'scout' | 'manual_url' | 'manual_context' |
+    // 'slack_concierge' (Sprint 7b+).
+    ingestSource: text('ingest_source'),
+    /** Counter incremented on each POST /api/leads/ingest match (soft UPSERT). */
+    manualIngestCount: integer('manual_ingest_count').notNull().default(0),
+    lastManualIngestAt: timestamp('last_manual_ingest_at', { withTimezone: true }),
 
     // Lifecycle timestamps (denormalized for fast kanban + analytics)
     discoveredAt: timestamp('discovered_at', { withTimezone: true }).notNull().defaultNow(),

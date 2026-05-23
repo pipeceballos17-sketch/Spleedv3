@@ -65,7 +65,13 @@ const ProfilerJobSchema = z.object({
   leadId: z.string().uuid(),
   orgId: z.string().uuid(),
   scoutRunId: z.string().uuid().optional(),
-  triggerType: z.enum(['auto_from_scout', 'manual', 'cron']),
+  /**
+   * Sprint 7a — 'manual_reingest' added for re-enqueue path from POST
+   * /api/leads/ingest when an existing 'discovered' lead is re-ingested
+   * by the founder. Distinct from 'manual' (initial run-lead trigger)
+   * so Hermes can attribute conversion to the originating ingest channel.
+   */
+  triggerType: z.enum(['auto_from_scout', 'manual', 'manual_reingest', 'cron']),
 })
 
 export type ProfilerJob = z.infer<typeof ProfilerJobSchema>
@@ -945,13 +951,20 @@ export async function processProfilerJob(
   const apify = overrides.apify ?? new ApifyClient()
   const anthropic = overrides.anthropic ?? new AnthropicClient({ apiKey: 'mock' })
 
+  // Sprint 7a — leads.{fullName, firstName, lastName, company, role}
+  // are nullable post-migration 0007 (manual ingest path may create a
+  // lead from URL alone, with identity fields populated by Profiler
+  // enrichment afterwards). Synthesize placeholders here so LeadShape's
+  // string contract stays clean and the prompt builders don't render
+  // "null at null" in their headers.
+  const placeholderName = lead.companyDomain ?? lead.linkedinUrl ?? lead.id
   const leadShape: LeadShape & { id: string } = {
     id: lead.id,
-    fullName: lead.fullName,
-    firstName: lead.firstName,
-    lastName: lead.lastName,
-    company: lead.company,
-    role: lead.role,
+    fullName: lead.fullName ?? `Pending enrichment (${placeholderName})`,
+    firstName: lead.firstName ?? 'Unknown',
+    lastName: lead.lastName ?? 'Unknown',
+    company: lead.company ?? lead.companyDomain ?? 'Unknown company',
+    role: lead.role ?? 'Unknown',
     companyDomain: lead.companyDomain,
     email: lead.email,
     linkedinUrl: lead.linkedinUrl,
@@ -1047,8 +1060,8 @@ export async function processProfilerJob(
         {
           kind: category === 'quota' ? 'quota' : 'failure',
           leadId,
-          leadName: lead.fullName,
-          company: lead.company,
+          leadName: lead.fullName ?? leadShape.fullName,
+          company: lead.company ?? leadShape.company,
           error: { category, message: message.slice(0, 200), code },
           provider: 'profiler',
         },

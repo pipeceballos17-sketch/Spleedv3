@@ -261,6 +261,8 @@ describe('parseICPToApolloFilters', () => {
       definitionNaturalLanguage: '',
       parsedFilters: { version: '1', titles: [], seniorities: [], techStack: [] },
       isActive: true,
+      // Sprint 7a — isDefault flag for manual lead ingest fallback.
+      isDefault: false,
       naturalLanguageUpdatedAt: new Date(),
       parsedFiltersUpdatedAt: null,
       createdAt: new Date(),

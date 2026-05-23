@@ -18,6 +18,7 @@
     "clean": "rm -rf .turbo *.tsbuildinfo"
   },
   "dependencies": {
+    "@spleed/shared": "workspace:*",
     "zod": "^3.23.0"
   },
   "devDependencies": {

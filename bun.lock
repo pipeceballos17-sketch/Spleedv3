@@ -17,6 +17,8 @@
       "dependencies": {
         "@spleed/agents": "workspace:*",
         "@spleed/db": "workspace:*",
+        "@spleed/shared": "workspace:*",
+        "bullmq": "^5.21.0",
         "drizzle-orm": "^0.36.0",
         "zod": "^3.23.0",
       },
@@ -79,6 +81,7 @@
       "name": "@spleed/integrations",
       "version": "0.0.0",
       "dependencies": {
+        "@spleed/shared": "workspace:*",
         "zod": "^3.23.0",
       },
       "devDependencies": {
@@ -93,6 +96,7 @@
         "zod": "^3.23.0",
       },
       "devDependencies": {
+        "@types/bun": "^1.1.0",
         "typescript": "^5.7.0",
       },
     },

@@ -15,7 +15,10 @@ export {
   COST_PER_PROFILE_USD,
   mockScrapeLinkedinPosts,
   mockScrapeLinkedinProfile,
-  normalizeLinkedinUrl,
   synthesizeEmptyPosts,
   synthesizeUnknownProfile,
 } from './mock'
+// Sprint 7a — normalizeLinkedinUrl moved to @spleed/shared/normalize for
+// cross-package reuse (API ingest + apify mock + future Composer). Callers
+// previously importing from `@spleed/integrations/apify` should switch to
+// `@spleed/shared/normalize`.

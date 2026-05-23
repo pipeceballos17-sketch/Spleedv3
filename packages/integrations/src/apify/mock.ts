@@ -17,6 +17,7 @@
  * downstream extraction degrades to empty signals rather than failing.
  */
 
+import { normalizeLinkedinUrl } from '@spleed/shared/normalize'
 import type {
   ApifyLinkedinPostsScrapeResult,
   ApifyLinkedinProfileScrapeResult,
@@ -38,16 +39,19 @@ function daysAgoIso(days: number): string {
 }
 
 /**
- * Strip protocol/trailing slash + lowercase. Apollo emits URLs as
- * `https://linkedin.com/in/sarahchen`; tests sometimes pass raw handles.
- * Both shapes resolve to the same key after normalization.
+ * Convert any LinkedIn URL/handle shape to a bare-host lookup key for
+ * MOCK_PROFILES / MOCK_POSTS. Routes through the canonical shared
+ * normalizer (Sprint 7a single source of truth) then strips the
+ * https://-prefix so keys stay `linkedin.com/in/<handle>` for compactness.
+ *
+ * Returns the empty string for non-LinkedIn input — internal sentinel
+ * that misses every MOCK_PROFILES key, so callers fall through to
+ * synthesizeUnknownProfile gracefully.
  */
-function normalizeLinkedinUrl(url: string): string {
-  return url
-    .toLowerCase()
-    .replace(/^https?:\/\//, '')
-    .replace(/^www\./, '')
-    .replace(/\/$/, '')
+function toBareLinkedinKey(url: string): string {
+  const canonical = normalizeLinkedinUrl(url)
+  if (!canonical) return ''
+  return canonical.replace(/^https:\/\//, '')
 }
 
 // ─── Curated profiles ───────────────────────────────────────────────
@@ -361,7 +365,7 @@ const MOCK_POSTS: Record<string, LinkedinPost[]> = {
  * so callers can synthesize an empty result deterministically.
  */
 export function mockScrapeLinkedinProfile(url: string): ApifyLinkedinProfileScrapeResult | null {
-  const key = normalizeLinkedinUrl(url)
+  const key = toBareLinkedinKey(url)
   const profile = MOCK_PROFILES[key]
   if (!profile) return null
   return {
@@ -382,7 +386,7 @@ export function mockScrapeLinkedinPosts(
   url: string,
   options: { limit?: number; sinceDays?: number } = {},
 ): ApifyLinkedinPostsScrapeResult | null {
-  const key = normalizeLinkedinUrl(url)
+  const key = toBareLinkedinKey(url)
   const posts = MOCK_POSTS[key]
   if (posts === undefined) return null
   const sinceDays = options.sinceDays ?? 90
@@ -407,7 +411,7 @@ export function mockScrapeLinkedinPosts(
  * dossier rather than crash.
  */
 export function synthesizeUnknownProfile(url: string): ApifyLinkedinProfileScrapeResult {
-  const key = normalizeLinkedinUrl(url)
+  const key = toBareLinkedinKey(url)
   return {
     profile: {
       fullName: 'Unknown LinkedIn profile',
@@ -425,7 +429,7 @@ export function synthesizeUnknownProfile(url: string): ApifyLinkedinProfileScrap
 }
 
 export function synthesizeEmptyPosts(url: string): ApifyLinkedinPostsScrapeResult {
-  const key = normalizeLinkedinUrl(url)
+  const key = toBareLinkedinKey(url)
   return {
     posts: [],
     metadata: {
@@ -437,10 +441,4 @@ export function synthesizeEmptyPosts(url: string): ApifyLinkedinPostsScrapeResul
   }
 }
 
-export {
-  MOCK_PROFILES,
-  MOCK_POSTS,
-  COST_PER_PROFILE_USD,
-  COST_PER_POSTS_USD,
-  normalizeLinkedinUrl,
-}
+export { MOCK_POSTS, MOCK_PROFILES, COST_PER_POSTS_USD, COST_PER_PROFILE_USD }

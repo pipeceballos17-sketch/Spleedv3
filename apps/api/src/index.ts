@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import {
   getServiceClient,
@@ -15,6 +15,8 @@ import {
   pauseScoutCron,
   getScoutCron,
 } from '@spleed/agents/workers'
+import { normalizeCompanyDomain, normalizeLinkedinUrl } from '@spleed/shared/normalize'
+import { waitForJob } from './helpers/wait-for-job'
 import { startWorkers } from './workers/start'
 
 const port = Number(process.env.API_PORT ?? 3001)
@@ -379,6 +381,355 @@ async function postProfilerRunLead(req: Request, leadId: string): Promise<Respon
   )
 }
 
+// ─── Manual lead ingest (Sprint 7a) ───────────────────────────────────
+
+/**
+ * Payload for POST /api/leads/ingest. All identity fields optional —
+ * caller can ingest from URL alone (Profiler enrichment fills the rest).
+ * Validation that at least one of (linkedinUrl|companyDomain|name) is
+ * present happens post-normalize in the handler (a string input like
+ * `"not a domain"` normalizes to null).
+ */
+const IngestPayloadSchema = z.object({
+  linkedinUrl: z.string().optional(),
+  companyDomain: z.string().optional(),
+  name: z.string().min(2).max(200).optional(),
+  title: z.string().max(200).optional(),
+  icpId: z.string().uuid().optional(),
+  notes: z.string().max(2000).optional(),
+})
+
+const INGEST_TIMEOUT_DEFAULT_MS = 60_000
+const INGEST_TIMEOUT_MAX_MS = 90_000
+const INGEST_TIMEOUT_MIN_MS = 1_000
+
+/**
+ * Resolve which ICP a new lead should be associated with. Explicit
+ * icpId wins (verify ownership first); otherwise fall back to the
+ * org's default ICP; otherwise null (lead is parked with no ICP and
+ * the Profiler worker's skip-if-no-icpId path activates).
+ */
+async function resolveIcpId(
+  db: ReturnType<typeof getServiceClient>,
+  orgId: string,
+  requestedIcpId: string | undefined,
+): Promise<{ icpId: string | null } | { error: Response }> {
+  if (requestedIcpId) {
+    const rows = await db
+      .select({ id: icpsTable.id })
+      .from(icpsTable)
+      .where(and(eq(icpsTable.id, requestedIcpId), eq(icpsTable.orgId, orgId)))
+    if (rows.length === 0) {
+      return {
+        error: Response.json(
+          {
+            error: 'ICP_NOT_IN_ORG',
+            message: `ICP ${requestedIcpId} not found for this org`,
+          },
+          { status: 403 },
+        ),
+      }
+    }
+    return { icpId: requestedIcpId }
+  }
+  // Fall back to org default ICP (icps.is_default=true, at most one per org
+  // by partial unique index from migration 0007).
+  const rows = await db
+    .select({ id: icpsTable.id })
+    .from(icpsTable)
+    .where(and(eq(icpsTable.orgId, orgId), eq(icpsTable.isDefault, true)))
+  return { icpId: rows[0]?.id ?? null }
+}
+
+/**
+ * Soft dedupe lookup. Linkedin URL is the strongest match (1:1 mapping
+ * to a person across the web); (companyDomain + name) is a fallback for
+ * URL-less ingests where the founder typed both. companyDomain alone is
+ * intentionally NOT a match key — every company has many leads.
+ */
+async function findExistingLead(
+  db: ReturnType<typeof getServiceClient>,
+  orgId: string,
+  match: { linkedinUrl: string | null; companyDomain: string | null; name: string | null },
+): Promise<typeof leadsTable.$inferSelect | null> {
+  if (match.linkedinUrl) {
+    const rows = await db
+      .select()
+      .from(leadsTable)
+      .where(
+        and(eq(leadsTable.orgId, orgId), eq(leadsTable.linkedinUrl, match.linkedinUrl)),
+      )
+      .limit(1)
+    if (rows[0]) return rows[0]
+  }
+  if (match.companyDomain && match.name) {
+    const rows = await db
+      .select()
+      .from(leadsTable)
+      .where(
+        and(
+          eq(leadsTable.orgId, orgId),
+          eq(leadsTable.companyDomain, match.companyDomain),
+          sql`lower(${leadsTable.fullName}) = lower(${match.name})`,
+        ),
+      )
+      .limit(1)
+    if (rows[0]) return rows[0]
+  }
+  return null
+}
+
+/**
+ * Re-trigger Profiler only when the lead hasn't been successfully
+ * enriched yet OR is in a fresh-discovered state (Sprint 6b worker
+ * reverts to 'discovered' after all-source-fail, so this covers the
+ * "failed previously, re-try now" case implicitly).
+ */
+function shouldRetriggerProfiler(currentStatus: typeof leadsTable.$inferSelect['status']): boolean {
+  return currentStatus === 'discovered'
+}
+
+/**
+ * POST /api/leads/ingest — manual lead ingest from founder workflow.
+ *
+ * Behavior matrix:
+ *   - New lead + icpId: 201 { leadId, profilerJobId, status: 'queued' }
+ *   - New lead + no icpId: 201 { leadId, status: 'parked_no_icp' }
+ *   - Existing match + status='discovered': 200 { leadId, status: 'already_exists', mode: 're_enriching' }
+ *   - Existing match + status='enriched': 200 { leadId, status: 'already_exists', mode: 'cached' }
+ *   - ?wait=true + completed: 201 { leadId, dossier }
+ *   - ?wait=true + timeout: 202 { leadId, status: 'in_progress' }
+ *   - ?wait=true + job failed: 201 { leadId, status: 'failed', error }
+ *   - 400 INVALID_PAYLOAD if no valid input after normalize
+ *   - 403 ICP_NOT_IN_ORG if explicit icpId belongs to another org
+ */
+async function postLeadIngest(req: Request): Promise<Response> {
+  const auth = getOrgId(req)
+  if ('error' in auth) return auth.error
+
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return Response.json(
+      { error: 'INVALID_JSON', message: 'Request body must be valid JSON' },
+      { status: 400 },
+    )
+  }
+  const parsed = IngestPayloadSchema.safeParse(body)
+  if (!parsed.success) {
+    return Response.json(
+      { error: 'INVALID_BODY', issues: parsed.error.issues },
+      { status: 400 },
+    )
+  }
+
+  // Normalize. A non-LinkedIn URL passed via linkedinUrl returns null
+  // (caller falls back to companyDomain or rejects below).
+  const linkedinUrl = parsed.data.linkedinUrl
+    ? normalizeLinkedinUrl(parsed.data.linkedinUrl)
+    : null
+  const companyDomain = parsed.data.companyDomain
+    ? normalizeCompanyDomain(parsed.data.companyDomain)
+    : null
+  const name = parsed.data.name ?? null
+  const title = parsed.data.title ?? null
+  const notes = parsed.data.notes ?? null
+
+  if (!linkedinUrl && !companyDomain && !name) {
+    return Response.json(
+      {
+        error: 'INVALID_PAYLOAD',
+        message:
+          'At least one of linkedinUrl, companyDomain, or name is required (after normalization)',
+      },
+      { status: 400 },
+    )
+  }
+
+  // Sync-mode query params. timeoutMs clamped to [1000, 90000].
+  const url = new URL(req.url)
+  const wait = url.searchParams.get('wait') === 'true'
+  const timeoutMsRaw = parseInt(
+    url.searchParams.get('timeoutMs') ?? `${INGEST_TIMEOUT_DEFAULT_MS}`,
+    10,
+  )
+  const timeoutMs = Number.isFinite(timeoutMsRaw)
+    ? Math.min(INGEST_TIMEOUT_MAX_MS, Math.max(INGEST_TIMEOUT_MIN_MS, timeoutMsRaw))
+    : INGEST_TIMEOUT_DEFAULT_MS
+
+  const db = getServiceClient()
+
+  // Resolve ICP.
+  const icpResolution = await resolveIcpId(db, auth.orgId, parsed.data.icpId)
+  if ('error' in icpResolution) return icpResolution.error
+  const icpId = icpResolution.icpId
+
+  // Dedupe lookup.
+  const existing = await findExistingLead(db, auth.orgId, {
+    linkedinUrl,
+    companyDomain,
+    name,
+  })
+
+  const nowIso = new Date().toISOString()
+
+  if (existing) {
+    // ─── UPSERT path — increment counter, append notes, conditional re-trigger
+    const existingRaw = (existing.rawSignals as Record<string, unknown>) ?? {}
+    const existingNotes =
+      (existingRaw.manualIngestNotes as Array<{ at: string; text: string }>) ?? []
+    const newRawSignals = notes
+      ? { ...existingRaw, manualIngestNotes: [...existingNotes, { at: nowIso, text: notes }] }
+      : existingRaw
+
+    await db
+      .update(leadsTable)
+      .set({
+        manualIngestCount: existing.manualIngestCount + 1,
+        lastManualIngestAt: new Date(),
+        ingestSource: existing.ingestSource ?? 'manual_url',
+        rawSignals: newRawSignals,
+        updatedAt: new Date(),
+      })
+      .where(eq(leadsTable.id, existing.id))
+
+    const retrigger = shouldRetriggerProfiler(existing.status) && existing.icpId !== null
+
+    if (retrigger) {
+      await profilerWorker.enqueue({
+        leadId: existing.id,
+        orgId: auth.orgId,
+        triggerType: 'manual_reingest',
+      })
+    }
+
+    const mode: 'cached' | 're_enriching' = retrigger ? 're_enriching' : 'cached'
+    const responseBody = {
+      leadId: existing.id,
+      status: 'already_exists' as const,
+      mode,
+      manualIngestCount: existing.manualIngestCount + 1,
+    }
+
+    // Wait flag only meaningful when a job was actually enqueued.
+    if (wait && retrigger) {
+      const profilerJobId = `profiler-${existing.id}`
+      const result = await waitForJob({
+        queueName: 'profiler',
+        jobId: profilerJobId,
+        timeoutMs,
+      })
+      if (result.status === 'completed') {
+        const [dossier] = await db
+          .select()
+          .from(leadDossiersTable)
+          .where(eq(leadDossiersTable.leadId, existing.id))
+        return Response.json(
+          { leadId: existing.id, status: 'completed', dossier },
+          { status: 200 },
+        )
+      }
+      if (result.status === 'failed') {
+        return Response.json(
+          { leadId: existing.id, status: 'failed', error: result.error },
+          { status: 200 },
+        )
+      }
+      // timeout — caller can poll GET /api/leads/:id/dossier
+      return Response.json(
+        { leadId: existing.id, status: 'in_progress' },
+        { status: 202 },
+      )
+    }
+
+    return Response.json(responseBody, { status: 200 })
+  }
+
+  // ─── INSERT path — new lead
+  const initialRawSignals: Record<string, unknown> = notes
+    ? { manualIngestNotes: [{ at: nowIso, text: notes }] }
+    : {}
+
+  const [inserted] = await db
+    .insert(leadsTable)
+    .values({
+      orgId: auth.orgId,
+      icpId,
+      status: 'discovered',
+      fullName: name,
+      firstName: null,
+      lastName: null,
+      company: null,
+      role: title,
+      companyDomain,
+      linkedinUrl,
+      foundVia: 'manual_ingest',
+      ingestSource: 'manual_url',
+      manualIngestCount: 1,
+      lastManualIngestAt: new Date(),
+      rawSignals: initialRawSignals,
+    })
+    .returning({ id: leadsTable.id })
+
+  if (!inserted) {
+    return Response.json(
+      { error: 'INSERT_FAILED', message: 'Failed to create lead row' },
+      { status: 500 },
+    )
+  }
+  const leadId = inserted.id
+
+  // Enqueue Profiler only when an ICP is associated (worker would skip
+  // otherwise — saves a no-op job round-trip).
+  if (!icpId) {
+    return Response.json(
+      { leadId, status: 'parked_no_icp' },
+      { status: 201 },
+    )
+  }
+
+  await profilerWorker.enqueue({
+    leadId,
+    orgId: auth.orgId,
+    triggerType: 'manual',
+  })
+  const profilerJobId = `profiler-${leadId}`
+
+  if (wait) {
+    const result = await waitForJob({
+      queueName: 'profiler',
+      jobId: profilerJobId,
+      timeoutMs,
+    })
+    if (result.status === 'completed') {
+      const [dossier] = await db
+        .select()
+        .from(leadDossiersTable)
+        .where(eq(leadDossiersTable.leadId, leadId))
+      return Response.json(
+        { leadId, profilerJobId, status: 'completed', dossier },
+        { status: 201 },
+      )
+    }
+    if (result.status === 'failed') {
+      return Response.json(
+        { leadId, profilerJobId, status: 'failed', error: result.error },
+        { status: 201 },
+      )
+    }
+    return Response.json(
+      { leadId, profilerJobId, status: 'in_progress' },
+      { status: 202 },
+    )
+  }
+
+  return Response.json(
+    { leadId, profilerJobId, status: 'queued' },
+    { status: 201 },
+  )
+}
+
 // ─── Bun.serve dispatch ───────────────────────────────────────────────
 
 const SCOUT_RUN_GET_RE = /^\/api\/scout\/runs\/([^/]+)$/
@@ -388,9 +739,11 @@ const ICP_CRON_DELETE_RE = /^\/api\/icps\/([^/]+)\/cron$/
 const LEAD_DOSSIER_GET_RE = /^\/api\/leads\/([^/]+)\/dossier$/
 const PROFILER_RUN_LEAD_RE = /^\/api\/profiler\/run-lead\/([^/]+)$/
 
-const server = Bun.serve({
-  port,
-  async fetch(req) {
+// Sprint 7a — export the dispatch fetch so apps/api/src/tests/ can drive
+// the handlers via synthetic Request objects without binding the port.
+// Bun.serve below is gated under `import.meta.main` so test imports don't
+// boot a duplicate server.
+export async function dispatch(req: Request): Promise<Response> {
     const url = new URL(req.url)
 
     if (url.pathname === '/health') {
@@ -402,6 +755,18 @@ const server = Bun.serve({
         return await postScoutRun(req)
       } catch (err) {
         console.error('[POST /api/scout/run] internal error', err)
+        return Response.json(
+          { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
+          { status: 500 },
+        )
+      }
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/leads/ingest') {
+      try {
+        return await postLeadIngest(req)
+      } catch (err) {
+        console.error('[POST /api/leads/ingest] internal error', err)
         return Response.json(
           { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
           { status: 500 },
@@ -491,23 +856,27 @@ const server = Bun.serve({
     }
 
     return new Response('Spleed API', { status: 200 })
-  },
-})
-
-console.log(`spleed-api listening on http://localhost:${server.port}`)
-
-// Sprint 3: start BullMQ workers in the same process as the API server.
-// Sprint 12+ may split workers to a dedicated Railway service if scaling
-// pressure demands it. For MVP, co-location keeps ops simple.
-const running = startWorkers()
-console.log(`spleed-api started ${running.count} worker(s)`)
-
-const shutdown = async (signal: string): Promise<void> => {
-  console.log(`${signal} received — stopping workers and server…`)
-  await running.stop()
-  server.stop()
-  process.exit(0)
 }
 
-process.on('SIGTERM', () => void shutdown('SIGTERM'))
-process.on('SIGINT', () => void shutdown('SIGINT'))
+// Sprint 7a — only bind the port + start workers when this file is run
+// directly (bun src/index.ts). Imported by tests, no side effects.
+if (import.meta.main) {
+  const server = Bun.serve({ port, fetch: dispatch })
+  console.log(`spleed-api listening on http://localhost:${server.port}`)
+
+  // Sprint 3: start BullMQ workers in the same process as the API server.
+  // Sprint 12+ may split workers to a dedicated Railway service if scaling
+  // pressure demands it. For MVP, co-location keeps ops simple.
+  const running = startWorkers()
+  console.log(`spleed-api started ${running.count} worker(s)`)
+
+  const shutdown = async (signal: string): Promise<void> => {
+    console.log(`${signal} received — stopping workers and server…`)
+    await running.stop()
+    server.stop()
+    process.exit(0)
+  }
+
+  process.on('SIGTERM', () => void shutdown('SIGTERM'))
+  process.on('SIGINT', () => void shutdown('SIGINT'))
+}

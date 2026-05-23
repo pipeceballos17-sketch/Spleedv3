@@ -8,11 +8,14 @@
     "dev": "bun --hot src/index.ts",
     "start": "bun src/index.ts",
     "typecheck": "tsc --noEmit",
+    "test": "bun --env-file=../../.env.local test src/tests/",
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
     "@spleed/agents": "workspace:*",
     "@spleed/db": "workspace:*",
+    "@spleed/shared": "workspace:*",
+    "bullmq": "^5.21.0",
     "drizzle-orm": "^0.36.0",
     "zod": "^3.23.0"
   },
