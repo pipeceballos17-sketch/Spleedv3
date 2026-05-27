@@ -64,6 +64,13 @@ export const icps = pgTable(
     // partial unique index below.
     isDefault: boolean('is_default').notNull().default(false),
 
+    // Sprint 7b — tenant-provided guidance injected into DEEP_RESEARCH_PROMPT.
+    // Lets a founder steer the Profiler's Phase 7 deep research toward
+    // industry-specific public sources (SEC EDGAR, UCC filings, accreditation
+    // registries, etc.) WITHOUT Spleed hardcoding industry mappings — preserves
+    // the horizontal B2B positioning. NULL = universal core-4 research only.
+    deepResearchGuidance: text('deep_research_guidance'),
+
     naturalLanguageUpdatedAt: timestamp('natural_language_updated_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -246,12 +253,13 @@ export const leadDossiers = pgTable(
 
     // Sprint 6 — annotated screenshot evidence for hook_candidates surfaced by Profiler.
     // One entry per hook with screenshot uploaded to Supabase Storage (org-scoped path).
-    // sourceType matches the 3 MVP sources from Sprint 6 decisions; future sources extend.
+    // sourceType matches the Sprint 6 MVP sources plus Sprint 7b deep
+    // research. TS-only widening (jsonb stores any shape); no migration.
     evidenceUrls: jsonb('evidence_urls').$type<Array<{
       hookId: string
       url: string
       capturedAt: string
-      sourceType: 'company_website' | 'linkedin' | 'news'
+      sourceType: 'company_website' | 'linkedin' | 'news' | 'deep_research'
     }>>().notNull().default(sql`'[]'::jsonb`),
 
     confidenceScore: real('confidence_score').default(0),

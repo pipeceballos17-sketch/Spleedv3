@@ -407,7 +407,8 @@ describe('POST /api/leads/ingest — sync mode ?wait=true', () => {
       }
       expect(body.status).toBe('completed')
       expect(body.dossier).toBeDefined()
-      expect(body.dossier?.enrichedBy).toBe('profiler_agent_v2')
+      // Sprint 7b bumped the worker stamp to v3 (deep research pipeline).
+      expect(body.dossier?.enrichedBy).toBe('profiler_agent_v3')
     } finally {
       await worker.close()
     }

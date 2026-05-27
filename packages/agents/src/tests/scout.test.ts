@@ -263,6 +263,8 @@ describe('parseICPToApolloFilters', () => {
       isActive: true,
       // Sprint 7a — isDefault flag for manual lead ingest fallback.
       isDefault: false,
+      // Sprint 7b — deep research tenant guidance (null = universal core 4).
+      deepResearchGuidance: null,
       naturalLanguageUpdatedAt: new Date(),
       parsedFiltersUpdatedAt: null,
       createdAt: new Date(),

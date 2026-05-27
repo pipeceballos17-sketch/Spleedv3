@@ -1,0 +1,1 @@
+ALTER TABLE "icps" ADD COLUMN "deep_research_guidance" text;

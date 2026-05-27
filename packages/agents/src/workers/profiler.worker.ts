@@ -10,17 +10,20 @@ import {
 } from '@spleed/db'
 import {
   AnthropicClient,
+  type DeepResearchOutput,
   type IcpShape,
   type ProfilerSourceName,
 } from '@spleed/integrations/anthropic'
 import { ApifyClient } from '@spleed/integrations/apify'
 import { SlackWebhookClient } from '@spleed/integrations/slack'
 import { VercelBrowserClient } from '@spleed/integrations/vercel-browser'
+import { DeepResearchAgent } from '../agents/deep-research'
 import {
   extractCompanyWebsiteSignals,
   extractLinkedinSignals,
   extractNewsSignals,
   synthesizeDossier,
+  synthesizeFinalDossier,
   type CompanyWebsiteSignalsWithIds,
   type LeadShape,
   type SynthesisSourceInput,
@@ -87,12 +90,18 @@ export interface ProfilerResult {
   status: 'enriched' | 'skipped'
   /** Total hooks in the synthesized dossier (post-dedupe). */
   hookCount: number
-  /** Sum of all 8 cost_events (or fewer if sources failed). */
+  /** Sum of all cost_events (8 Sprint 6b baseline + 4 Phase 7/8 when deep research runs). */
   costUsd: number
   /** Names of sources that produced signals. */
   successfulSources: ProfilerSourceName[]
   /** Names of sources that failed extraction. */
   failedSources: ProfilerSourceName[]
+  /** Sprint 7b — Phase 7 deep research fired (initial confidence < threshold). */
+  phase7Triggered: boolean
+  /** Sprint 7b — Phase 7 ran but threw; fell back to Phase 6 synthesis. */
+  phase7Failed: boolean
+  /** Sprint 7b — Phase 8 final synthesis ran (only when Phase 7 produced output). */
+  phase8Ran: boolean
 }
 
 export interface ProcessProfilerJobOverrides {
@@ -100,11 +109,25 @@ export interface ProcessProfilerJobOverrides {
   apify?: ApifyClient
   anthropic?: AnthropicClient
   slack?: SlackWebhookClient
+  /** Sprint 7b — inject a custom DeepResearchAgent (tests force throw/empty). */
+  deepResearchAgent?: DeepResearchAgent
   retryBackoffBaseMs?: number
   retryMaxAttempts?: number
   /** Force storage helper mock mode regardless of env (tests use this). */
   storageMockMode?: boolean
 }
+
+/**
+ * Sprint 7b — Phase 7 deep research fires only when the Phase 6 initial
+ * synthesis confidence is below this bar. High-confidence leads (rich
+ * initial 3-source signal) skip the expensive Opus research entirely.
+ * Per-ICP override deferred to BACKLOG-043 (Sprint 8+).
+ */
+const DEEP_RESEARCH_THRESHOLD = 0.75
+
+/** Anthropic native web tool unit costs (mirror integrations mock constants). */
+const WEB_SEARCH_COST_USD = 0.01
+const WEB_FETCH_COST_USD = 0.001
 
 /**
  * Slack notify helper — Profiler-specific failure message. Uses sendText
@@ -718,9 +741,20 @@ async function scrapeAndExtractNews(
 const SOURCE_NAMES: ProfilerSourceName[] = ['company_website', 'linkedin', 'news']
 
 function buildDossierFromSynthesis(args: {
+  /** Final dossier to persist — Phase 6 synthesis OR Phase 8 final synthesis. */
   synthesis: SynthesizedDossier
   successfulSources: SourceExtractionResult[]
   allEvidenceUrls: UploadedScreenshot[]
+  /** Sprint 7b — deep research output (null when Phase 7 skipped/failed). */
+  deepResearchOutput?: DeepResearchOutput | null
+  /** Sprint 7b — phase metadata persisted into rawSignals for observability. */
+  phaseMeta?: {
+    phase7Triggered: boolean
+    phase7Failed: boolean
+    phase8Ran: boolean
+    initialConfidence: number
+    finalConfidence: number
+  }
 }): {
   pains: Array<{
     description: string
@@ -810,7 +844,45 @@ function buildDossierFromSynthesis(args: {
     }
   }
 
-  // ─── rawSignals — per-source breakdown + partial flag
+  // ─── Sprint 7b — aggregate deep research findings into recentChanges +
+  // collect deep-research evidence URLs (sourceType='deep_research').
+  const deepEvidenceUrls: Array<{
+    hookId: string
+    url: string
+    capturedAt: string
+    sourceType: ProfilerSourceName
+  }> = []
+  if (args.deepResearchOutput) {
+    const dr = args.deepResearchOutput
+    const categories: Array<[string, DeepResearchOutput['succession_signals']]> = [
+      ['succession', dr.succession_signals],
+      ['hiring', dr.hiring_signals],
+      ['tech_stack', dr.tech_stack_signals],
+      ['recent_activity', dr.recent_activity_signals],
+    ]
+    for (const [kind, category] of categories) {
+      for (const finding of category.findings) {
+        recentChanges.push({
+          kind: `deep_research_${kind}`,
+          description: finding.signal,
+          sourceUrl: finding.source_url ?? 'deep_research',
+          occurredAt: nowIso,
+        })
+        // Each finding with a source_url becomes an evidence entry. hookId
+        // is synthesized (deep research findings aren't screenshot-keyed).
+        if (finding.source_url) {
+          deepEvidenceUrls.push({
+            hookId: crypto.randomUUID(),
+            url: finding.source_url,
+            capturedAt: nowIso,
+            sourceType: 'deep_research',
+          })
+        }
+      }
+    }
+  }
+
+  // ─── rawSignals — per-source breakdown + partial flag + deep research
   const successfulByName = new Map(
     args.successfulSources.map((s) => [s.sourceName, s.signals] as const),
   )
@@ -821,6 +893,8 @@ function buildDossierFromSynthesis(args: {
     companyWebsiteSignals: successfulByName.get('company_website') ?? null,
     linkedinSignals: successfulByName.get('linkedin') ?? null,
     newsSignals: successfulByName.get('news') ?? null,
+    // Sprint 7b — full deep research dossier (null when Phase 7 skipped/failed).
+    deepResearchSignals: args.deepResearchOutput ?? null,
     synthesis: {
       hookCandidates: args.synthesis.hookCandidates,
       recommendedAngle: args.synthesis.recommendedAngle,
@@ -829,13 +903,24 @@ function buildDossierFromSynthesis(args: {
     },
     partialEnrichment,
     missingSources,
+    // Sprint 7b — phase observability (Hermes Sprint 8 reads these to learn
+    // when deep research earns its cost).
+    ...(args.phaseMeta
+      ? {
+          phase7Triggered: args.phaseMeta.phase7Triggered,
+          phase7Failed: args.phaseMeta.phase7Failed,
+          phase8Ran: args.phaseMeta.phase8Ran,
+          initialConfidence: args.phaseMeta.initialConfidence,
+          finalConfidence: args.phaseMeta.finalConfidence,
+        }
+      : {}),
   }
 
   return {
     pains,
     interests,
     recentChanges,
-    evidenceUrls: args.allEvidenceUrls,
+    evidenceUrls: [...args.allEvidenceUrls, ...deepEvidenceUrls],
     rawSignals,
   }
 }
@@ -875,6 +960,9 @@ export async function processProfilerJob(
       costUsd: 0,
       successfulSources: [],
       failedSources: [],
+      phase7Triggered: false,
+      phase7Failed: false,
+      phase8Ran: false,
     }
   }
 
@@ -909,13 +997,13 @@ export async function processProfilerJob(
     .values({
       leadId,
       orgId,
-      enrichedBy: 'profiler_agent_v2',
+      enrichedBy: 'profiler_agent_v3',
       isStale: false,
     })
     .onConflictDoUpdate({
       target: leadDossiersTable.leadId,
       set: {
-        enrichedBy: 'profiler_agent_v2',
+        enrichedBy: 'profiler_agent_v3',
         isStale: false,
         updatedAt: new Date(),
       },
@@ -943,6 +1031,9 @@ export async function processProfilerJob(
       costUsd: 0,
       successfulSources: [],
       failedSources: [],
+      phase7Triggered: false,
+      phase7Failed: false,
+      phase8Ran: false,
     }
   }
 
@@ -1110,12 +1201,166 @@ export async function processProfilerJob(
       },
     })
 
-    // ─── Phase 7: Persist dossier ──────────────────────────────────
+    // ─── Phase 7: Deep research (conditional) ──────────────────────
+    // Fires only when the Phase 6 synthesis confidence is below threshold.
+    // High-confidence leads skip the expensive Opus research entirely.
+    let deepResearchOutput: DeepResearchOutput | null = null
+    let phase7Failed = false
+    const phase7Triggered = synthesis.confidenceScore < DEEP_RESEARCH_THRESHOLD
+
+    if (phase7Triggered) {
+      ctx.logger.info(
+        { leadId, initialConfidence: synthesis.confidenceScore, threshold: DEEP_RESEARCH_THRESHOLD },
+        '[profiler] Phase 7: triggering deep research',
+      )
+      const deepResearchAgent =
+        overrides.deepResearchAgent ??
+        new DeepResearchAgent({
+          anthropicClient: anthropic,
+          apifyClient: apify,
+          vercelBrowserClient: vercel,
+        })
+      try {
+        deepResearchOutput = await withTransientRetry(
+          () =>
+            deepResearchAgent.research({
+              lead: leadShape,
+              icp: icpShape,
+              guidance: icp.deepResearchGuidance ?? null,
+              initialSynthesis: synthesis,
+            }),
+          'anthropic',
+          {
+            // Lower retry budget — Opus deep research is expensive.
+            maxRetries: overrides.retryMaxAttempts ?? 2,
+            backoffBaseMs: overrides.retryBackoffBaseMs,
+          },
+        )
+
+        // Granular Phase 7 cost_events: LLM + web_search + web_fetch +
+        // (conditional) custom tools.
+        const phase7CostRows: Array<typeof costEvents.$inferInsert> = [
+          {
+            orgId,
+            runId: scoutRunId ?? null,
+            agentType: 'profiler',
+            provider: 'anthropic',
+            operationType: 'deep_research_llm',
+            tokensIn: deepResearchOutput.tokensIn,
+            tokensOut: deepResearchOutput.tokensOut,
+            costUsd: deepResearchOutput.llmCostUsd.toFixed(6),
+            latencyMs: deepResearchOutput.latencyMs,
+            success: true,
+            metadata: { lead_id: leadId, model: 'claude-opus-4-7' },
+          },
+          {
+            orgId,
+            runId: scoutRunId ?? null,
+            agentType: 'profiler',
+            provider: 'anthropic',
+            operationType: 'deep_research_web_search',
+            costUsd: (deepResearchOutput.toolCalls.webSearchCount * WEB_SEARCH_COST_USD).toFixed(6),
+            success: true,
+            metadata: { lead_id: leadId, count: deepResearchOutput.toolCalls.webSearchCount },
+          },
+          {
+            orgId,
+            runId: scoutRunId ?? null,
+            agentType: 'profiler',
+            provider: 'anthropic',
+            operationType: 'deep_research_web_fetch',
+            costUsd: (deepResearchOutput.toolCalls.webFetchCount * WEB_FETCH_COST_USD).toFixed(6),
+            success: true,
+            metadata: { lead_id: leadId, count: deepResearchOutput.toolCalls.webFetchCount },
+          },
+          ...deepResearchOutput.toolCalls.customToolCalls.map((call) => ({
+            orgId,
+            runId: scoutRunId ?? null,
+            agentType: 'profiler' as const,
+            provider: (call.provider === 'apify' ? 'apify' : 'vercel_browser') as
+              | 'apify'
+              | 'vercel_browser',
+            operationType: 'deep_research_custom_tool',
+            costUsd: call.costUsd.toFixed(6),
+            success: true,
+            metadata: { lead_id: leadId, tool_name: call.name },
+          })),
+        ]
+        await raw.insert(costEvents).values(phase7CostRows)
+      } catch (deepErr) {
+        // Isolated failure — fall back to Phase 6 synthesis as the final
+        // dossier. Record a failure cost_event so the spend (if any) +
+        // failure category are visible.
+        phase7Failed = true
+        deepResearchOutput = null
+        const category = classifyError(deepErr, 'anthropic')
+        await raw.insert(costEvents).values({
+          orgId,
+          runId: scoutRunId ?? null,
+          agentType: 'profiler',
+          provider: 'anthropic',
+          operationType: 'deep_research_llm',
+          costUsd: '0.000000',
+          success: false,
+          errorCode: deepErr instanceof Error ? deepErr.message.slice(0, 200) : 'UNKNOWN',
+          metadata: { lead_id: leadId, category },
+        })
+        ctx.logger.warn(
+          { leadId, error: deepErr instanceof Error ? deepErr.message : String(deepErr) },
+          '[profiler] Phase 7 deep research failed — falling back to Phase 6 synthesis',
+        )
+      }
+    }
+
+    // ─── Phase 8: Final synthesis (conditional) ────────────────────
+    // Runs only when Phase 7 produced output. Consolidates 4 sources;
+    // confidence ceiling 0.95. When skipped, the Phase 6 synthesis IS
+    // the final dossier.
+    let synthesisFinal: SynthesizedDossier = synthesis
+    if (deepResearchOutput) {
+      synthesisFinal = await synthesizeFinalDossier({
+        sources: synthesisSources,
+        deepResearchOutput,
+        initialSynthesis: synthesis,
+        lead: leadShape,
+        icp: icpShape,
+        anthropicClient: anthropic,
+      })
+      await raw.insert(costEvents).values({
+        orgId,
+        runId: scoutRunId ?? null,
+        agentType: 'profiler',
+        provider: 'anthropic',
+        operationType: 'synthesis_final',
+        tokensIn: synthesisFinal.tokensIn,
+        tokensOut: synthesisFinal.tokensOut,
+        costUsd: synthesisFinal.costUsd.toFixed(6),
+        latencyMs: synthesisFinal.latencyMs,
+        success: true,
+        metadata: {
+          lead_id: leadId,
+          model: anthropic.model,
+          initial_confidence: synthesis.confidenceScore,
+          final_confidence: synthesisFinal.confidenceScore,
+          hook_count: synthesisFinal.hookCandidates.length,
+        },
+      })
+    }
+
+    // ─── Phase 9: Persist dossier (uses synthesisFinal) ────────────
     const allEvidenceUrls = successful.flatMap((s) => s.evidenceUrls)
     const dossierFields = buildDossierFromSynthesis({
-      synthesis,
+      synthesis: synthesisFinal,
       successfulSources: successful,
       allEvidenceUrls,
+      deepResearchOutput,
+      phaseMeta: {
+        phase7Triggered,
+        phase7Failed,
+        phase8Ran: deepResearchOutput !== null,
+        initialConfidence: synthesis.confidenceScore,
+        finalConfidence: synthesisFinal.confidenceScore,
+      },
     })
 
     await raw
@@ -1126,23 +1371,32 @@ export async function processProfilerJob(
         recentChanges: dossierFields.recentChanges,
         evidenceUrls: dossierFields.evidenceUrls,
         rawSignals: dossierFields.rawSignals,
-        confidenceScore: synthesis.confidenceScore,
+        confidenceScore: synthesisFinal.confidenceScore,
         isStale: false,
-        enrichedBy: 'profiler_agent_v2',
+        enrichedBy: 'profiler_agent_v3',
         updatedAt: new Date(),
       })
       .where(
         and(eq(leadDossiersTable.leadId, leadId), eq(leadDossiersTable.orgId, orgId)),
       )
 
-    // ─── Phase 8: Mark lead as enriched ────────────────────────────
+    // ─── Phase 10: Mark lead as enriched ───────────────────────────
     await raw
       .update(leadsTable)
       .set({ status: 'enriched', enrichedAt: new Date(), updatedAt: new Date() })
       .where(and(eq(leadsTable.id, leadId), eq(leadsTable.orgId, orgId)))
 
+    const deepResearchCostUsd = deepResearchOutput
+      ? deepResearchOutput.llmCostUsd +
+        deepResearchOutput.toolCalls.webSearchCount * WEB_SEARCH_COST_USD +
+        deepResearchOutput.toolCalls.webFetchCount * WEB_FETCH_COST_USD +
+        deepResearchOutput.toolCalls.customToolCalls.reduce((s, t) => s + t.costUsd, 0) +
+        synthesisFinal.costUsd
+      : 0
     const totalCostUsd =
-      successful.reduce((sum, s) => sum + s.totalCostUsd, 0) + synthesis.costUsd
+      successful.reduce((sum, s) => sum + s.totalCostUsd, 0) +
+      synthesis.costUsd +
+      deepResearchCostUsd
 
     ctx.logger.info(
       {
@@ -1150,21 +1404,28 @@ export async function processProfilerJob(
         company: lead.company,
         successfulSources: successful.map((s) => s.sourceName),
         failedSources: missingSourceNames,
-        hookCount: synthesis.hookCandidates.length,
-        confidenceScore: synthesis.confidenceScore,
+        hookCount: synthesisFinal.hookCandidates.length,
+        initialConfidence: synthesis.confidenceScore,
+        finalConfidence: synthesisFinal.confidenceScore,
+        phase7Triggered,
+        phase7Failed,
+        phase8Ran: deepResearchOutput !== null,
         costUsd: totalCostUsd,
       },
-      '[profiler] lead enriched (Sprint 6b)',
+      '[profiler] lead enriched (Sprint 7b)',
     )
 
     return {
       ok: true,
       leadId,
       status: 'enriched',
-      hookCount: synthesis.hookCandidates.length,
+      hookCount: synthesisFinal.hookCandidates.length,
       costUsd: totalCostUsd,
       successfulSources: successful.map((s) => s.sourceName),
       failedSources: missingSourceNames,
+      phase7Triggered,
+      phase7Failed,
+      phase8Ran: deepResearchOutput !== null,
     }
   } catch (err) {
     // Outer catch — covers Phase 5b throw (all-sources failure already

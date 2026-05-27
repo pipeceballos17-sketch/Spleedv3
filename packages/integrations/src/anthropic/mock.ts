@@ -1,4 +1,5 @@
 import type {
+  DeepResearchOutput,
   ExtractedCompanyWebsiteSignals,
   ExtractedLinkedinSignals,
   ExtractedNewsSignals,
@@ -820,3 +821,538 @@ export function mockSynthesisLatencyMs(hint: string): number {
 }
 
 export { MOCK_LINKEDIN_SIGNALS, MOCK_NEWS_SIGNALS, MOCK_SYNTHESIS_DOSSIERS }
+
+// ─── Deep research (Sprint 7b — Phase 7) mock ───────────────────────
+
+/**
+ * Opus 4.7 token estimates for a deep-research session. Chosen so the
+ * computed LLM cost lands at ~$0.42 (Opus rate $15/$75 per M):
+ *   10000 in × $15/M + 3600 out × $75/M = $0.15 + $0.27 = $0.42
+ */
+export const MOCK_DEEP_RESEARCH_TOKENS_IN = 10_000
+export const MOCK_DEEP_RESEARCH_TOKENS_OUT = 3_600
+
+/** Anthropic native web tool unit costs (2026 pricing). */
+export const WEB_SEARCH_COST_USD = 0.01
+export const WEB_FETCH_COST_USD = 0.001
+
+/** Mock tool-call counts for a typical deep-research session. */
+export const MOCK_DEEP_RESEARCH_WEB_SEARCH_COUNT = 8
+export const MOCK_DEEP_RESEARCH_WEB_FETCH_COUNT = 4
+/** Apify LinkedIn scrape cost when the agent invokes the custom tool. */
+export const MOCK_DEEP_RESEARCH_CUSTOM_TOOL_COST_USD = 0.1
+
+/**
+ * Empty-but-valid deep research output. Returned for domains without a
+ * curated MOCK_DEEP_RESEARCH_DOSSIERS entry (Wallace-style sparse leads),
+ * and as the Sprint 7b CP1 default until CP2 populates the curated map.
+ * Cost metadata still recorded — a deep-research attempt that surfaces
+ * nothing still burns Opus + web-search budget.
+ */
+const EMPTY_DEEP_RESEARCH_CATEGORY = { findings: [], summary: '' }
+
+/**
+ * Curated deep-research dossiers keyed by company domain, cross-coherent
+ * with Sprint 6b MOCK_SYNTHESIS_DOSSIERS (e.g. pulseanalytics.io's
+ * succession finding ties Brian Chen's CSO appointment to the Series A
+ * already in the synthesis dossier — Phase 8 dedup merges all three
+ * evidence quotes into one hook).
+ *
+ * Fixtures carry their own toolCalls so per-domain research intensity
+ * varies realistically (Wallace's sparse 6-search / 2-fetch yields
+ * nothing; the commercial-lender's 12-search / 6-fetch / Apify combo
+ * mines SEC EDGAR + UCC). LLM tokens/cost + latency are layered uniformly
+ * by mockResearchDeep (the Opus call size is similar regardless of yield).
+ */
+const MOCK_DEEP_RESEARCH_DOSSIERS: Record<
+  string,
+  Omit<DeepResearchOutput, 'tokensIn' | 'tokensOut' | 'llmCostUsd' | 'latencyMs'>
+> = {
+  // ─── 1. pulseanalytics.io — Sarah Chen, US SaaS Series A ──────────
+  'pulseanalytics.io': {
+    succession_signals: {
+      findings: [
+        {
+          signal: 'Brian Chen (founder\'s brother) joined as Chief Strategy Officer 2 months ago, post Series A',
+          evidence:
+            'LinkedIn announcement: "Thrilled to join my sister Sarah at Pulse Analytics as CSO to scale what she started."',
+          source_url: 'https://linkedin.com/in/brianchen-cso',
+          confidence: 0.95,
+        },
+        {
+          signal: 'Costanoa board observer seat added alongside Series A close',
+          evidence: 'Crunchbase board section lists a new Costanoa Ventures observer as of July 2025.',
+          source_url: 'https://crunchbase.com/organization/pulse-analytics',
+          confidence: 0.8,
+        },
+      ],
+      summary:
+        'Strong succession signal: founder co-opted a family member as CSO immediately post-Series A, indicating deliberate strategic-continuity build-out.',
+    },
+    hiring_signals: {
+      findings: [
+        {
+          signal: '5 GTM roles posted in the past 30 days (VP Sales, 3 AE, 1 SDR)',
+          evidence: 'Pulse Analytics careers page lists 5 open commercial roles, all posted within 30 days.',
+          source_url: 'https://pulseanalytics.io/careers',
+          confidence: 0.9,
+        },
+      ],
+      summary: 'Aggressive GTM hiring sprint — the org is building its first real sales team now.',
+    },
+    tech_stack_signals: {
+      findings: [
+        {
+          signal: 'Migrating CRM from Pipedrive to Salesforce (inferred from VP Sales job description)',
+          evidence:
+            'VP Sales posting: "Lead our migration from Pipedrive to Salesforce and build the RevOps function from scratch."',
+          source_url: 'https://pulseanalytics.io/careers/vp-sales',
+          confidence: 0.85,
+        },
+      ],
+      summary: 'CRM migration in flight — a window for adjacent tooling decisions before processes ossify.',
+    },
+    recent_activity_signals: {
+      findings: [
+        {
+          signal: 'Sarah keynoted SaaStr 2025 on activation metrics',
+          evidence: 'SaaStr 2025 agenda lists Sarah Chen keynote: "Activation metrics that actually move retention."',
+          source_url: 'https://saastr.com/2025/agenda',
+          confidence: 0.9,
+        },
+        {
+          signal: "Podcast guest on Lenny's Newsletter 3 weeks ago",
+          evidence: "Lenny's Podcast episode 218 features Sarah Chen on product-led growth analytics.",
+          source_url: 'https://lennysnewsletter.com/podcast/218',
+          confidence: 0.88,
+        },
+      ],
+      summary: 'High public profile — Sarah is actively building thought leadership in the PLG analytics space.',
+    },
+    recommended_hooks: [
+      {
+        hook: "Tie Sarah's Series A to Brian's CSO appointment as evidence of a deliberate scaling playbook — reference both in the opener",
+        evidence:
+          '[deep_research] Brian Chen joined as CSO post-Series A | [news] TechCrunch $14M Series A July 2025 | [linkedin] Sarah Series A announcement post',
+        sourceName: 'deep_research',
+        confidence: 0.92,
+      },
+      {
+        hook: 'Lead with the Pipedrive→Salesforce migration — RevOps build-out is the active pain and the timing window is now',
+        evidence: '[deep_research] VP Sales JD: "Lead our migration from Pipedrive to Salesforce and build RevOps from scratch."',
+        sourceName: 'deep_research',
+        confidence: 0.87,
+      },
+    ],
+    toolCalls: {
+      webSearchCount: 8,
+      webFetchCount: 4,
+      customToolCalls: [{ name: 'scrape_linkedin_profile', provider: 'apify', costUsd: 0.1 }],
+    },
+  },
+
+  // ─── 2. wallacesteel.com — Henry Wallace, sparse signal ───────────
+  // Graceful partial: deep research ran (burned search budget) but found
+  // nothing actionable. Phase 8 gets minimal lift; confidence stays low.
+  'wallacesteel.com': {
+    succession_signals: {
+      findings: [],
+      summary: 'No public succession signals. Family-owned, no regulatory filings, no LinkedIn officer activity.',
+    },
+    hiring_signals: {
+      findings: [],
+      summary: 'No public job postings found. Hiring likely handled via local/offline channels.',
+    },
+    tech_stack_signals: {
+      findings: [],
+      summary: 'No discernible technology footprint — thin website, no job descriptions revealing stack.',
+    },
+    recent_activity_signals: {
+      findings: [],
+      summary: 'No podcasts, conference appearances, or public commentary found for Henry Wallace.',
+    },
+    recommended_hooks: [],
+    toolCalls: {
+      // Exhaustive search, nothing actionable — no custom-tool spend.
+      webSearchCount: 6,
+      webFetchCount: 2,
+      customToolCalls: [],
+    },
+  },
+
+  // ─── 3. examplelender.com — commercial lending / factoring ────────
+  // Tenant guidance assumed: "Prioritize SEC EDGAR, state registries, UCC filings."
+  // Highest research intensity — heavy government-source mining.
+  'examplelender.com': {
+    succession_signals: {
+      findings: [
+        {
+          signal: 'CEO Jorge Martinez (62) — son joined as VP Operations 6 months ago',
+          evidence: 'SEC EDGAR 10-K Item 10: notes Daniel Martinez (VP Operations) and references "ongoing succession planning."',
+          source_url: 'https://sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=example',
+          confidence: 0.9,
+        },
+        {
+          signal: 'Board added an independent director with M&A background (2025 proxy)',
+          evidence: 'DEF 14A proxy: new independent director with private-equity M&A experience joined Q1 2025.',
+          source_url: 'https://sec.gov/edgar/example-def14a',
+          confidence: 0.78,
+        },
+      ],
+      summary:
+        'Active succession + governance signals in SEC filings — next-gen family member elevated, M&A-experienced director added. Potential transition window.',
+    },
+    hiring_signals: {
+      findings: [
+        {
+          signal: 'Recent COO hire poached from a direct factoring competitor',
+          evidence: 'LinkedIn: new COO previously SVP Operations at a rival factoring lender, started 2 months ago.',
+          source_url: 'https://linkedin.com/in/example-coo',
+          confidence: 0.85,
+        },
+      ],
+      summary: 'Senior operational hire from a competitor signals scaling intent and operational maturation.',
+    },
+    tech_stack_signals: {
+      findings: [
+        {
+          signal: 'Legacy Sageworks factoring platform; RFP issued for replacement',
+          evidence: 'State procurement portal lists an active RFP for "factoring/lending origination platform replacement."',
+          source_url: 'https://procurement.example-state.gov/rfp/2026-0412',
+          confidence: 0.82,
+        },
+      ],
+      summary: 'Legacy core-system replacement in active RFP — a rare buying-window signal for adjacent vendors.',
+    },
+    recent_activity_signals: {
+      findings: [
+        {
+          signal: 'Jorge Martinez is a Commercial Finance Association (CFA) member, 2 recent podcast appearances',
+          evidence: 'CFA member directory + 2 episodes of "Secured Lending Today" featuring Jorge Martinez in past quarter.',
+          source_url: 'https://cfa.com/members/example',
+          confidence: 0.8,
+        },
+      ],
+      summary: 'Industry-association engagement + podcast presence — accessible via trade-channel warm intro.',
+    },
+    recommended_hooks: [
+      {
+        hook: 'Reference the active RFP for Sageworks replacement — the buying window is open and timing is everything in core-system swaps',
+        evidence: '[deep_research] State procurement RFP: "factoring/lending origination platform replacement" (active)',
+        sourceName: 'deep_research',
+        confidence: 0.84,
+      },
+      {
+        hook: "Acknowledge the succession-planning language in their 10-K and Daniel's elevation — shows you did the homework on a family-business transition",
+        evidence: '[deep_research] SEC EDGAR 10-K Item 10: Daniel Martinez VP Operations + "ongoing succession planning"',
+        sourceName: 'deep_research',
+        confidence: 0.86,
+      },
+    ],
+    toolCalls: {
+      webSearchCount: 12,
+      webFetchCount: 6,
+      customToolCalls: [{ name: 'scrape_linkedin_profile', provider: 'apify', costUsd: 0.1 }],
+    },
+  },
+
+  // ─── 4. colegiosanandres.edu.co — escuela bilingüe Colombia ───────
+  // Tenant guidance assumed: "MEN Colombia, ICFES, registros mercantiles,
+  // ASPAEN/UNCOLI, El Tiempo/Semana."
+  'colegiosanandres.edu.co': {
+    succession_signals: {
+      findings: [
+        {
+          signal: 'Family ownership (Pérez family, 3 generations); Laura Pérez heir apparent for rectory',
+          evidence:
+            'Registro mercantil lists Pérez family as owners since 1962; Laura Pérez (Directora Académica) widely positioned as next rector.',
+          source_url: 'https://rues.org.co/example-colegio-san-andres',
+          confidence: 0.88,
+        },
+      ],
+      summary:
+        'Multi-generational family institution with a clear heir apparent (Laura Pérez). Decision-making concentrates in the family.',
+    },
+    hiring_signals: {
+      findings: [
+        {
+          signal: '2 senior teaching roles posted (IB Coordinator + Math Department Head)',
+          evidence: 'Colegio careers + ASPAEN job board list IB Coordinator and Math Head openings.',
+          source_url: 'https://colegiosanandres.edu.co/empleo',
+          confidence: 0.83,
+        },
+      ],
+      summary: 'Senior academic hiring suggests International Baccalaureate program expansion.',
+    },
+    tech_stack_signals: {
+      findings: [
+        {
+          signal: 'Legacy Phidias school-management system; IT director hinting at migration',
+          evidence: 'IT director LinkedIn post: "Evaluating modern alternatives to our current SIS — recommendations welcome."',
+          source_url: 'https://linkedin.com/in/example-it-director',
+          confidence: 0.75,
+        },
+      ],
+      summary: 'School-information-system migration under consideration — adjacent edtech buying window.',
+    },
+    recent_activity_signals: {
+      findings: [
+        {
+          signal: 'ASPAEN member; El Tiempo coverage on bilingual education; ICFES 2025 top-10 Colombia',
+          evidence: 'El Tiempo feature on bilingual schools cites Colegio San Andrés; ICFES 2025 results rank it top 10 nationally.',
+          source_url: 'https://eltiempo.com/educacion/colegios-bilingues-2026',
+          confidence: 0.85,
+        },
+      ],
+      summary: 'Strong public academic reputation + association membership — credibility-driven outreach lands well.',
+    },
+    recommended_hooks: [
+      {
+        hook: "Recognize Laura Pérez as the next-generation academic leader and the ICFES 2025 top-10 result — flatter the institutional legacy + recent win",
+        evidence:
+          '[deep_research] Registro mercantil 3-gen Pérez ownership + Laura heir apparent | [deep_research] ICFES 2025 top-10 | [linkedin] Laura Directora Académica',
+        sourceName: 'deep_research',
+        confidence: 0.85,
+      },
+      {
+        hook: 'Lead with the SIS migration the IT director is exploring — concrete, current, and adjacent to any edtech offering',
+        evidence: '[deep_research] IT director LinkedIn: "Evaluating modern alternatives to our current SIS."',
+        sourceName: 'deep_research',
+        confidence: 0.74,
+      },
+    ],
+    toolCalls: {
+      webSearchCount: 10,
+      webFetchCount: 5,
+      customToolCalls: [{ name: 'scrape_linkedin_profile', provider: 'apify', costUsd: 0.1 }],
+    },
+  },
+
+  // ─── 5. exemplofintech.com.br — Brazilian fintech (cross-LatAm) ───
+  'exemplofintech.com.br': {
+    succession_signals: {
+      findings: [
+        {
+          signal: 'Founder-CEO Mariana Silva (39); no clear succession signal',
+          evidence: 'No regulatory or LinkedIn evidence of succession planning — early-stage founder-led.',
+          source_url: 'https://linkedin.com/in/mariana-silva-fintech',
+          confidence: 0.6,
+        },
+      ],
+      summary: 'Founder firmly at the helm; no succession dynamics. Decision-making is direct.',
+    },
+    hiring_signals: {
+      findings: [
+        {
+          signal: 'Series B raised; 10 engineering hires in past 60 days',
+          evidence: 'LinkedIn + careers page show 10 new engineers joined in 60 days post Series B.',
+          source_url: 'https://exemplofintech.com.br/carreiras',
+          confidence: 0.9,
+        },
+      ],
+      summary: 'Aggressive engineering scale-up post Series B — building product velocity.',
+    },
+    tech_stack_signals: {
+      findings: [
+        {
+          signal: 'Microservices on AWS; hiring Site Reliability Engineers (mature-infra signal)',
+          evidence: 'SRE job descriptions reference Kubernetes, Terraform, and a microservices migration on AWS.',
+          source_url: 'https://exemplofintech.com.br/carreiras/sre',
+          confidence: 0.82,
+        },
+      ],
+      summary: 'Infra maturity signal — investing in reliability engineering, past the MVP-hacking phase.',
+    },
+    recent_activity_signals: {
+      findings: [
+        {
+          signal: 'Mariana on a Brazilian fintech podcast; Forbes Brasil 30 Under 30; speaks at LatAm tech conferences',
+          evidence: 'Forbes Brasil 30 Under 30 2025 list + podcast "Fintechs do Brasil" episode + LatAm conf speaker bio.',
+          source_url: 'https://forbes.com.br/30under30/2025',
+          confidence: 0.87,
+        },
+      ],
+      summary: 'High-visibility founder across LatAm fintech media — warm-channel access via conference circuit.',
+    },
+    recommended_hooks: [
+      {
+        hook: "Congratulate the Series B and reference Mariana's Forbes Brasil 30 Under 30 — momentum + recognition in one opener",
+        evidence: '[deep_research] Series B + 10 eng hires | [deep_research] Forbes Brasil 30 Under 30 2025',
+        sourceName: 'deep_research',
+        confidence: 0.86,
+      },
+      {
+        hook: 'Note their SRE hiring as proof of infra maturity — position any tooling as fitting a team that already invests in reliability',
+        evidence: '[deep_research] SRE JDs: Kubernetes + Terraform + microservices on AWS',
+        sourceName: 'deep_research',
+        confidence: 0.8,
+      },
+    ],
+    toolCalls: {
+      webSearchCount: 9,
+      webFetchCount: 4,
+      customToolCalls: [{ name: 'scrape_linkedin_profile', provider: 'apify', costUsd: 0.1 }],
+    },
+  },
+}
+
+/**
+ * Deterministic deep-research mock. Looks curated dossier up by domain;
+ * unknown domains get empty signal categories (graceful — Profiler still
+ * proceeds to Phase 8 with thin deep research). Cost metadata is computed
+ * with the Opus rate regardless of the client's configured model, since
+ * deep research always runs on Opus 4.7.
+ */
+export function mockResearchDeep(input: {
+  domainHint?: string
+}): DeepResearchOutput {
+  const key = input.domainHint
+    ?.toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/$/, '')
+    .split('/')[0] ?? ''
+  const curated = MOCK_DEEP_RESEARCH_DOSSIERS[key]
+
+  const tokensIn = MOCK_DEEP_RESEARCH_TOKENS_IN
+  const tokensOut = MOCK_DEEP_RESEARCH_TOKENS_OUT
+  // Opus 4.7 rate ($15 input / $75 output per 1M) — deep research is
+  // always Opus regardless of the AnthropicClient's default model.
+  const llmCostUsd = (tokensIn / 1_000_000) * 15 + (tokensOut / 1_000_000) * 75
+
+  const latencyHint = key || `len-${input.domainHint?.length ?? 0}`
+  const charSum = [...latencyHint].reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
+  const latencyMs = 8000 + (charSum % 7000) // 8-15s — deep research is slow
+
+  if (!curated) {
+    return {
+      succession_signals: { ...EMPTY_DEEP_RESEARCH_CATEGORY },
+      hiring_signals: { ...EMPTY_DEEP_RESEARCH_CATEGORY },
+      tech_stack_signals: { ...EMPTY_DEEP_RESEARCH_CATEGORY },
+      recent_activity_signals: { ...EMPTY_DEEP_RESEARCH_CATEGORY },
+      recommended_hooks: [],
+      tokensIn,
+      tokensOut,
+      llmCostUsd,
+      toolCalls: {
+        // Even an empty result burns search budget — the agent looked,
+        // found nothing actionable. No custom-tool spend on a dead lead.
+        webSearchCount: MOCK_DEEP_RESEARCH_WEB_SEARCH_COUNT,
+        webFetchCount: MOCK_DEEP_RESEARCH_WEB_FETCH_COUNT,
+        customToolCalls: [],
+      },
+      latencyMs,
+    }
+  }
+
+  // Curated fixtures carry their own per-domain toolCalls (research
+  // intensity varies — Wallace 6/2/none vs lender 12/6/Apify). LLM
+  // tokens/cost + latency are layered uniformly.
+  return {
+    ...curated,
+    tokensIn,
+    tokensOut,
+    llmCostUsd,
+    latencyMs,
+  }
+}
+
+export { MOCK_DEEP_RESEARCH_DOSSIERS }
+
+// ─── Final synthesis (Sprint 7b — Phase 8) mock ─────────────────────
+
+/**
+ * Sonnet 4.6 token estimate for the final synthesis. Higher than Phase 6
+ * (MOCK_SYNTHESIS_TOKENS) because the prompt now carries the deep research
+ * dossier on top of the 3 initial sources.
+ */
+export const MOCK_SYNTHESIS_FINAL_TOKENS_IN = 3200
+export const MOCK_SYNTHESIS_FINAL_TOKENS_OUT = 700
+
+export function mockSynthesisFinalLatencyMs(hint: string): number {
+  const charSum = [...hint].reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
+  return 2400 + (charSum % 1600) // 2400-4000ms
+}
+
+/**
+ * Deterministic final-synthesis mock. Merges the curated Phase 6 synthesis
+ * hooks (MOCK_SYNTHESIS_DOSSIERS) with the deep research recommended_hooks
+ * (MOCK_DEEP_RESEARCH_DOSSIERS), dedupes, takes top 5. Confidence calibration:
+ *
+ *   - deep research HAS findings:
+ *       3 initial sources → ceiling 0.92 (can reach 0.95 with strong signals)
+ *       2 initial sources → ceiling 0.82
+ *       1 initial source  → ceiling 0.72
+ *   - deep research EMPTY (Wallace): final confidence stays capped at 0.50
+ *     regardless of nominal source count — research that found nothing
+ *     adds no lift.
+ *
+ * Final confidence never drops below the initial Phase 6 confidence (the
+ * final synthesis only adds information).
+ */
+export function mockSynthesizeFinal(input: {
+  domainHint?: string
+  sourcesCount: 1 | 2 | 3
+  deepResearchHasFindings: boolean
+  initialConfidence: number
+}): SynthesizedDossierJson {
+  const key = input.domainHint
+    ?.toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/$/, '')
+    .split('/')[0] ?? ''
+
+  const synthesisCurated = MOCK_SYNTHESIS_DOSSIERS[key]
+  const deepCurated = MOCK_DEEP_RESEARCH_DOSSIERS[key]
+
+  // Deep research hooks lead (richer, integrate initial signals), then fill
+  // remaining slots with Phase 6 hooks whose core fact isn't already covered.
+  const deepHooks = (deepCurated?.recommended_hooks ?? []).map((h) => ({
+    hook: h.hook,
+    evidence: h.evidence,
+    sourceName: 'deep_research' as const,
+    confidence: h.confidence,
+  }))
+  const initialHooks = synthesisCurated?.hook_candidates ?? []
+  // Crude dedupe: skip an initial hook if a deep hook already mentions its
+  // first 4 significant words (catches "Series A" overlap etc).
+  const deepHaystack = deepHooks.map((h) => h.hook.toLowerCase()).join(' | ')
+  const dedupedInitial = initialHooks.filter((h) => {
+    const key4 = h.hook.toLowerCase().split(/\s+/).slice(0, 4).join(' ')
+    return !deepHaystack.includes(key4)
+  })
+  const mergedHooks = [...deepHooks, ...dedupedInitial].slice(0, 5)
+
+  // Confidence calibration. "4 sources" = 3 initial + deep research (which
+  // only runs in Phase 8 when it succeeded). Ceilings track the prompt:
+  // 4 sources → 0.95, 3 sources → 0.85, 2 sources → 0.75.
+  let confidence: number
+  if (input.deepResearchHasFindings) {
+    const ceiling =
+      input.sourcesCount === 3 ? 0.95 : input.sourcesCount === 2 ? 0.85 : 0.75
+    confidence = Math.min(0.95, Math.max(input.initialConfidence, ceiling))
+  } else {
+    // Empty deep research — no lift. "We looked and found nothing" caps
+    // confidence at 0.50 (a thin-dossier ceiling). Never adds a bump: a
+    // zero-signal lead (Wallace, initial 0) stays at 0.
+    confidence = Math.min(0.5, input.initialConfidence)
+  }
+
+  const recommendedAngle =
+    deepHooks.length > 0
+      ? (deepHooks[0]!.hook)
+      : (synthesisCurated?.recommended_angle ?? 'Engage based on available signals.')
+
+  // Pain: prefer deep-research-derived succession/hiring/tech narrative when
+  // present; else fall back to the Phase 6 synthesis pain.
+  const painInferred =
+    input.deepResearchHasFindings && deepCurated
+      ? `${synthesisCurated?.pain_inferred ?? ''} Deep research adds: ${deepCurated.succession_signals.summary || deepCurated.hiring_signals.summary || deepCurated.tech_stack_signals.summary}`.trim()
+      : (synthesisCurated?.pain_inferred ?? 'No specific pain pattern detected.')
+
+  return {
+    hook_candidates: mergedHooks,
+    recommended_angle: recommendedAngle,
+    pain_inferred: painInferred,
+    confidence_score: Number(confidence.toFixed(2)),
+  }
+}

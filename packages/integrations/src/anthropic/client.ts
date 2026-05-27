@@ -6,9 +6,14 @@ import {
   mockLinkedinLatencyMs,
   mockNewsLatencyMs,
   mockProfilerLatencyMs,
+  mockResearchDeep,
   mockScoreLead,
+  mockSynthesisFinalLatencyMs,
   mockSynthesisLatencyMs,
   mockSynthesizeDossier,
+  mockSynthesizeFinal,
+  MOCK_SYNTHESIS_FINAL_TOKENS_IN,
+  MOCK_SYNTHESIS_FINAL_TOKENS_OUT,
   MOCK_LINKEDIN_TOKENS_IN,
   MOCK_LINKEDIN_TOKENS_OUT,
   MOCK_NEWS_TOKENS_IN,
@@ -27,11 +32,15 @@ import type {
   ExtractLinkedinSignalsResult,
   ExtractNewsSignalsInput,
   ExtractNewsSignalsResult,
+  DeepResearchOutput,
+  ResearchDeepInput,
   ScoreLeadInput,
   ScoreLeadResult,
   ScoutLlmModel,
   SynthesizeDossierInput,
   SynthesizeDossierResult,
+  SynthesizeFinalInput,
+  SynthesizeFinalResult,
 } from './types'
 
 export interface AnthropicClientConfig {
@@ -308,6 +317,79 @@ export class AnthropicClient {
   ): Promise<SynthesizeDossierResult> {
     throw new Error(
       '[anthropic] live mode not implemented in Sprint 6b — wire real client in Sprint 7+ with BYOK (BACKLOG-027)',
+    )
+  }
+
+  // ─── Deep research (Sprint 7b — Phase 7) ─────────────────────────
+
+  /**
+   * Run a deep-research session (Opus 4.7 + native web tools + Spleed
+   * custom scrapers). Caller (DeepResearchAgent) builds the prompts and
+   * passes domainHint for mock lookup. Mock returns curated dossiers
+   * (MOCK_DEEP_RESEARCH_DOSSIERS) with Opus-rate cost metadata; live mode
+   * (Sprint 8+) wires the real Opus call with tool-use loop.
+   *
+   * Separate env flag (ANTHROPIC_DEEP_RESEARCH_LIVE) so Felipe can dev-
+   * validate the live research loop independently of the cheaper
+   * extraction/synthesis live paths (ANTHROPIC_LIVE).
+   */
+  async researchDeep(input: ResearchDeepInput): Promise<DeepResearchOutput> {
+    const liveDeepResearch = process.env.ANTHROPIC_DEEP_RESEARCH_LIVE === 'true'
+    if (this.mockMode && !liveDeepResearch) {
+      return mockResearchDeep({ domainHint: input.domainHint })
+    }
+    return this.researchDeepLive(input)
+  }
+
+  private async researchDeepLive(_input: ResearchDeepInput): Promise<DeepResearchOutput> {
+    // Sprint 8+: wire to @anthropic-ai/sdk Messages.create with model
+    // claude-opus-4-7, tools [web_search_20250305, web_fetch_20250712,
+    // scrape_linkedin_profile, scrape_company_website], and a tool-use
+    // loop that routes custom tools to the Apify/Vercel handlers. Parse
+    // the final JSON into DeepResearchOutput; accumulate per-tool costs.
+    throw new Error(
+      '[anthropic] deep research live mode not implemented in Sprint 7b — wire real Opus 4.7 + tool handling in Sprint 8+ when concierge customers come online',
+    )
+  }
+
+  // ─── Final synthesis (Sprint 7b — Phase 8) ───────────────────────
+
+  /**
+   * Consolidate the 1-3 initial sources + the deep research dossier into
+   * the FINAL outreach dossier (PROFILER_SYNTHESIS_FINAL_PROMPT). Higher
+   * confidence ceiling than Phase 6 (0.95 with 4 substantive sources).
+   * Caller (synthesis-final agent) builds the prompts + supplies the
+   * confidence-calibration hints the mock needs.
+   */
+  async synthesizeFinal(input: SynthesizeFinalInput): Promise<SynthesizeFinalResult> {
+    if (this.mockMode) {
+      return this.synthesizeFinalMock(input)
+    }
+    return this.synthesizeFinalLive(input)
+  }
+
+  private async synthesizeFinalMock(
+    input: SynthesizeFinalInput,
+  ): Promise<SynthesizeFinalResult> {
+    const dossier = mockSynthesizeFinal({
+      domainHint: input.domainHint,
+      sourcesCount: input.sourcesCount,
+      deepResearchHasFindings: input.deepResearchHasFindings,
+      initialConfidence: input.initialConfidence,
+    })
+    const tokensIn = MOCK_SYNTHESIS_FINAL_TOKENS_IN
+    const tokensOut = MOCK_SYNTHESIS_FINAL_TOKENS_OUT
+    const latencyHint = input.domainHint ?? `synthfinal-len-${input.userPrompt.length}`
+    const latencyMs = mockSynthesisFinalLatencyMs(latencyHint)
+    const costUsd = computeCostUsd(this.model, tokensIn, tokensOut)
+    return { dossier, tokensIn, tokensOut, costUsd, latencyMs }
+  }
+
+  private async synthesizeFinalLive(
+    _input: SynthesizeFinalInput,
+  ): Promise<SynthesizeFinalResult> {
+    throw new Error(
+      '[anthropic] final synthesis live mode not implemented in Sprint 7b — wire real client in Sprint 8+ with BYOK (BACKLOG-027)',
     )
   }
 }

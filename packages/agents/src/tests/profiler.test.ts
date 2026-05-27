@@ -47,6 +47,7 @@ import {
   resetMockSlackSends,
 } from '@spleed/integrations/slack'
 import { VercelBrowserClient } from '@spleed/integrations/vercel-browser'
+import { DeepResearchAgent } from '../agents/deep-research'
 import {
   extractCompanyWebsiteSignals,
   extractLinkedinSignals,
@@ -434,9 +435,11 @@ describe('processProfilerJob — end-to-end pipeline', () => {
       .from(leadDossiersTable)
       .where(eq(leadDossiersTable.leadId, leadId))
     expect(dossier).toBeDefined()
-    // Sprint 6b bumped enrichedBy from v1 (single-source) to v2 (3-source
-    // structured pipeline + synthesis).
-    expect(dossier?.enrichedBy).toBe('profiler_agent_v2')
+    // enrichedBy tracks the worker version: v1 (Sprint 6a single-source) →
+    // v2 (Sprint 6b 3-source) → v3 (Sprint 7b deep research pipeline).
+    // Sarah pulseanalytics Phase 6 confidence 0.88 ≥ 0.75 → Phase 7 skips,
+    // but the worker is v3 so the stamp is v3 regardless.
+    expect(dossier?.enrichedBy).toBe('profiler_agent_v3')
     expect((dossier?.pains as unknown[]).length).toBeGreaterThan(0)
     expect((dossier?.interests as unknown[]).length).toBeGreaterThan(0)
     expect((dossier?.recentChanges as unknown[]).length).toBeGreaterThan(0)
@@ -1330,5 +1333,245 @@ describe('ApifyClient — mock determinism (Sprint 6b)', () => {
     expect(posts1.posts[0]?.id).toBe(posts2.posts[0]?.id)
     expect(posts1.posts[0]?.content).toBe(posts2.posts[0]?.content)
     expect(posts1.costUsd).toBe(posts2.costUsd)
+  })
+})
+
+// ─── 25-29. Sprint 7b — Phase 7/8 deep research integration ─────────
+
+describe('processProfilerJob — Sprint 7b deep research (Phase 7/8)', () => {
+  it('Phase 7 triggers when Phase 6 confidence < 0.75 (examplelender → deep research fires)', async () => {
+    // examplelender.com is NOT in the Sprint 6b synthesis curated map →
+    // Phase 6 falls back to confidence 0.4 (< 0.75 threshold). It IS in
+    // MOCK_DEEP_RESEARCH_DOSSIERS → deep research surfaces findings.
+    const leadId = await createLead({
+      orgId: PROFILER_ORG_A,
+      icpId: ICP_PROFILER_SAAS,
+      fullName: 'Jorge Martinez',
+      firstName: 'Jorge',
+      lastName: 'Martinez',
+      company: 'Example Lender',
+      role: 'CEO',
+      companyDomain: 'examplelender.com',
+      linkedinUrl: 'https://linkedin.com/in/example-ceo',
+    })
+
+    const result = await processProfilerJob(
+      makeJob({ leadId, orgId: PROFILER_ORG_A }),
+      makeCtx(PROFILER_ORG_A),
+    )
+
+    expect(result.status).toBe('enriched')
+    expect(result.phase7Triggered).toBe(true)
+    expect(result.phase7Failed).toBe(false)
+    expect(result.phase8Ran).toBe(true)
+
+    const db = getServiceClient()
+    const [dossier] = await db
+      .select()
+      .from(leadDossiersTable)
+      .where(eq(leadDossiersTable.leadId, leadId))
+    expect(dossier?.enrichedBy).toBe('profiler_agent_v3')
+    const raw = dossier?.rawSignals as {
+      phase7Triggered?: boolean
+      phase8Ran?: boolean
+      deepResearchSignals?: unknown
+      initialConfidence?: number
+      finalConfidence?: number
+    }
+    expect(raw.phase7Triggered).toBe(true)
+    expect(raw.phase8Ran).toBe(true)
+    expect(raw.deepResearchSignals).not.toBeNull()
+    // Deep research boosted confidence: initial 0.4 → final 0.95 (3 sources + findings).
+    expect(raw.initialConfidence).toBeLessThan(0.75)
+    expect(raw.finalConfidence).toBe(0.95)
+  })
+
+  it('Phase 7 skips when Phase 6 confidence >= 0.75 (Sarah pulseanalytics → 8 cost_events baseline)', async () => {
+    const leadId = await createLead({
+      orgId: PROFILER_ORG_A,
+      icpId: ICP_PROFILER_SAAS,
+      fullName: 'Sarah Chen',
+      firstName: 'Sarah',
+      lastName: 'Chen',
+      company: 'Pulse Analytics',
+      role: 'Founder',
+      companyDomain: 'pulseanalytics.io',
+      linkedinUrl: 'https://linkedin.com/in/sarahchen',
+    })
+
+    const result = await processProfilerJob(
+      makeJob({ leadId, orgId: PROFILER_ORG_A }),
+      makeCtx(PROFILER_ORG_A),
+    )
+
+    expect(result.status).toBe('enriched')
+    // pulseanalytics Phase 6 synthesis confidence 0.88 ≥ 0.75 → skip.
+    expect(result.phase7Triggered).toBe(false)
+    expect(result.phase7Failed).toBe(false)
+    expect(result.phase8Ran).toBe(false)
+
+    const db = getServiceClient()
+    const [dossier] = await db
+      .select()
+      .from(leadDossiersTable)
+      .where(eq(leadDossiersTable.leadId, leadId))
+    // enrichedBy is v3 even when Phase 7 skips (Sprint 7b worker version).
+    expect(dossier?.enrichedBy).toBe('profiler_agent_v3')
+    const raw = dossier?.rawSignals as { deepResearchSignals?: unknown }
+    expect(raw.deepResearchSignals).toBeNull()
+
+    // 8 cost_events — Sprint 6b baseline, no Phase 7/8 rows.
+    const events = await db
+      .select()
+      .from(costEvents)
+      .where(
+        and(eq(costEvents.orgId, PROFILER_ORG_A), eq(costEvents.agentType, 'profiler')),
+      )
+    expect(events).toHaveLength(8)
+  })
+
+  it('Phase 7 graceful fail (deep research throws) → fallback to Phase 6, phase7Failed=true', async () => {
+    const leadId = await createLead({
+      orgId: PROFILER_ORG_A,
+      icpId: ICP_PROFILER_SAAS,
+      fullName: 'Jorge Martinez',
+      firstName: 'Jorge',
+      lastName: 'Martinez',
+      company: 'Example Lender',
+      role: 'CEO',
+      companyDomain: 'examplelender.com',
+      linkedinUrl: 'https://linkedin.com/in/example-ceo',
+    })
+
+    // Inject a DeepResearchAgent whose research() throws — simulates an
+    // Opus quota error. classifyError buckets 'quota' → permanent → no
+    // retry, Phase 7 catch fires.
+    const failingAgent = new DeepResearchAgent({
+      anthropicClient: new AnthropicClient({ apiKey: 'mock' }),
+      apifyClient: new ApifyClient(),
+      vercelBrowserClient: new VercelBrowserClient(),
+    })
+    failingAgent.research = async () => {
+      throw new Error('ANTHROPIC_QUOTA_EXHAUSTED: Opus deep research budget hit')
+    }
+
+    const result = await processProfilerJob(
+      makeJob({ leadId, orgId: PROFILER_ORG_A }),
+      makeCtx(PROFILER_ORG_A),
+      { deepResearchAgent: failingAgent, retryBackoffBaseMs: 1 },
+    )
+
+    // Still completes — Phase 6 synthesis becomes the final dossier.
+    expect(result.status).toBe('enriched')
+    expect(result.phase7Triggered).toBe(true)
+    expect(result.phase7Failed).toBe(true)
+    expect(result.phase8Ran).toBe(false)
+
+    const db = getServiceClient()
+    const [dossier] = await db
+      .select()
+      .from(leadDossiersTable)
+      .where(eq(leadDossiersTable.leadId, leadId))
+    const raw = dossier?.rawSignals as {
+      phase7Failed?: boolean
+      deepResearchSignals?: unknown
+      initialConfidence?: number
+      finalConfidence?: number
+    }
+    expect(raw.phase7Failed).toBe(true)
+    expect(raw.deepResearchSignals).toBeNull()
+    // Fallback: final confidence == initial (no Phase 8 lift).
+    expect(raw.finalConfidence).toBe(raw.initialConfidence)
+
+    // A failed deep_research_llm cost_event was recorded (success=false).
+    const failedEvents = await db
+      .select()
+      .from(costEvents)
+      .where(
+        and(
+          eq(costEvents.orgId, PROFILER_ORG_A),
+          eq(costEvents.operationType, 'deep_research_llm'),
+          eq(costEvents.success, false),
+        ),
+      )
+    expect(failedEvents.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('cost_events granular: full Phase 7/8 enrichment writes 13 rows', async () => {
+    const leadId = await createLead({
+      orgId: PROFILER_ORG_A,
+      icpId: ICP_PROFILER_SAAS,
+      fullName: 'Jorge Martinez',
+      firstName: 'Jorge',
+      lastName: 'Martinez',
+      company: 'Example Lender',
+      role: 'CEO',
+      companyDomain: 'examplelender.com',
+      linkedinUrl: 'https://linkedin.com/in/example-ceo',
+    })
+
+    await processProfilerJob(
+      makeJob({ leadId, orgId: PROFILER_ORG_A }),
+      makeCtx(PROFILER_ORG_A),
+    )
+
+    const db = getServiceClient()
+    const events = await db
+      .select()
+      .from(costEvents)
+      .where(
+        and(eq(costEvents.orgId, PROFILER_ORG_A), eq(costEvents.agentType, 'profiler')),
+      )
+    // 8 Sprint 6b baseline + 4 Phase 7 (llm + web_search + web_fetch + custom) + 1 Phase 8.
+    expect(events).toHaveLength(13)
+
+    const opTypes = new Set(events.map((e) => e.operationType))
+    expect(opTypes).toContain('deep_research_llm')
+    expect(opTypes).toContain('deep_research_web_search')
+    expect(opTypes).toContain('deep_research_web_fetch')
+    expect(opTypes).toContain('deep_research_custom_tool')
+    expect(opTypes).toContain('synthesis_final')
+
+    // web_search cost_event carries the count in metadata.
+    const webSearch = events.find((e) => e.operationType === 'deep_research_web_search')
+    expect((webSearch?.metadata as { count?: number })?.count).toBe(12)
+    // Custom tool routed to Apify (LinkedIn).
+    const customTool = events.find((e) => e.operationType === 'deep_research_custom_tool')
+    expect(customTool?.provider).toBe('apify')
+  })
+
+  it('multi-tenant: Org A deep research dossier invisible from Org B query', async () => {
+    const leadAId = await createLead({
+      orgId: PROFILER_ORG_A,
+      icpId: ICP_PROFILER_SAAS,
+      fullName: 'Jorge Martinez',
+      firstName: 'Jorge',
+      lastName: 'Martinez',
+      company: 'Example Lender',
+      role: 'CEO',
+      companyDomain: 'examplelender.com',
+      linkedinUrl: 'https://linkedin.com/in/example-ceo',
+    })
+
+    await processProfilerJob(
+      makeJob({ leadId: leadAId, orgId: PROFILER_ORG_A }),
+      makeCtx(PROFILER_ORG_A),
+    )
+
+    const db = getServiceClient()
+    // Org A dossier carries deep research signals.
+    const [dossierA] = await db
+      .select()
+      .from(leadDossiersTable)
+      .where(eq(leadDossiersTable.orgId, PROFILER_ORG_A))
+    expect((dossierA?.rawSignals as { deepResearchSignals?: unknown }).deepResearchSignals).not.toBeNull()
+
+    // Org B-scoped query → zero rows. Deep research data inherits the
+    // lead_dossiers row-level RLS contract.
+    const dossiersFromB = await db
+      .select()
+      .from(leadDossiersTable)
+      .where(eq(leadDossiersTable.orgId, PROFILER_ORG_B))
+    expect(dossiersFromB).toHaveLength(0)
   })
 })

@@ -12,6 +12,11 @@ export {
 } from './news-extraction'
 export { synthesizeDossier } from './synthesis'
 export {
+  synthesizeFinalDossier,
+  deepResearchHasFindings,
+  type SynthesizeFinalDossierInput,
+} from './synthesis-final'
+export {
   PROFILER_SYNTHESIS_PROMPT,
   PROFILER_SYSTEM_PROMPT,
   buildCompanyWebsiteUserPrompt,

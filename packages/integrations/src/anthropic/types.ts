@@ -174,7 +174,10 @@ export interface ExtractNewsSignalsResult {
  * dossier-level metadata (recommended_angle, pain_inferred, confidence)
  * is set in this call.
  */
-export type ProfilerSourceName = 'company_website' | 'linkedin' | 'news'
+// Sprint 7b — 'deep_research' added so final-synthesis (Phase 8) hooks can
+// attribute to the deep research source. Initial synthesis (Phase 6) only
+// emits the first three; the extra member is additive and unused there.
+export type ProfilerSourceName = 'company_website' | 'linkedin' | 'news' | 'deep_research'
 
 export interface SynthesizedHookCandidate {
   hook: string
@@ -217,6 +220,96 @@ export interface SynthesizeDossierInput {
 }
 
 export interface SynthesizeDossierResult {
+  dossier: SynthesizedDossierJson
+  tokensIn: number
+  tokensOut: number
+  costUsd: number
+  latencyMs: number
+}
+
+// ─── Deep research (Sprint 7b — Phase 7) ───────────────────────────
+
+/** One finding within a deep-research signal category. */
+export interface DeepResearchFinding {
+  signal: string
+  evidence: string
+  /** Cited source URL where the agent found the signal (optional). */
+  source_url?: string
+  confidence: number
+}
+
+/** One of the universal core-4 categories the deep research targets. */
+export interface DeepResearchSignalCategory {
+  findings: DeepResearchFinding[]
+  summary: string
+}
+
+/**
+ * Per-tool invocation accounting. The worker turns these counts into
+ * granular cost_events rows (one per tool kind). customToolCalls captures
+ * Spleed-managed scrapers (Apify/Vercel) invoked mid-research.
+ */
+export interface DeepResearchToolCalls {
+  webSearchCount: number
+  webFetchCount: number
+  customToolCalls: Array<{ name: string; provider: string; costUsd: number }>
+}
+
+/**
+ * Output of a deep research session. Four signal categories + integrated
+ * hook recommendations, plus cost/latency metadata the worker persists to
+ * cost_events. hooks carry sourceName='deep_research' so the final synthesis
+ * (Phase 8) can weight them for specificity.
+ */
+export interface DeepResearchOutput {
+  succession_signals: DeepResearchSignalCategory
+  hiring_signals: DeepResearchSignalCategory
+  tech_stack_signals: DeepResearchSignalCategory
+  recent_activity_signals: DeepResearchSignalCategory
+  recommended_hooks: Array<{
+    hook: string
+    evidence: string
+    sourceName: 'deep_research'
+    confidence: number
+  }>
+  tokensIn: number
+  tokensOut: number
+  /** Opus 4.7 LLM cost for the research call (excludes per-tool costs). */
+  llmCostUsd: number
+  toolCalls: DeepResearchToolCalls
+  latencyMs: number
+}
+
+export interface ResearchDeepInput {
+  systemPrompt: string
+  userPrompt: string
+  /**
+   * Mock lookup hint — pass `lead.companyDomain`. Curated deep-research
+   * dossiers (MOCK_DEEP_RESEARCH_DOSSIERS) are keyed on domain.
+   */
+  domainHint?: string
+}
+
+// ─── Final synthesis (Sprint 7b — Phase 8) ─────────────────────────
+
+export interface SynthesizeFinalInput {
+  systemPrompt: string
+  userPrompt: string
+  /** Curated lookup key (combines Phase 6 synthesis + deep research hooks). */
+  domainHint?: string
+  /** Initial source count (Phase 5). Drives the confidence ceiling. */
+  sourcesCount: 1 | 2 | 3
+  /**
+   * Whether deep research surfaced any findings. When false (Wallace-style
+   * empty research), the final confidence stays capped low even with 4
+   * nominal sources — deep research that found nothing adds no lift.
+   */
+  deepResearchHasFindings: boolean
+  /** Phase 6 confidence — the floor the final synthesis builds on. */
+  initialConfidence: number
+}
+
+export interface SynthesizeFinalResult {
   dossier: SynthesizedDossierJson
   tokensIn: number
   tokensOut: number
