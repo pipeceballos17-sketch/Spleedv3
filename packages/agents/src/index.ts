@@ -5,3 +5,4 @@
 export * from './runtime'
 export * from './tools'
 export * from './workers'
+export * from './ingest'

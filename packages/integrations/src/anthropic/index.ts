@@ -7,6 +7,7 @@ export {
 } from './client'
 export type {
   CompanyStage,
+  ConciergePayload,
   DeepResearchFinding,
   DeepResearchOutput,
   DeepResearchSignalCategory,
@@ -21,6 +22,8 @@ export type {
   ExtractNewsSignalsInput,
   ExtractNewsSignalsResult,
   IcpShape,
+  ParseConciergeQueryInput,
+  ParseConciergeQueryResult,
   ProfilerSourceName,
   ResearchDeepInput,
   ScoreLeadInput,

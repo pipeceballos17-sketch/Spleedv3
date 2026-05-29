@@ -43,6 +43,7 @@ import {
 import { ApifyClient } from '@spleed/integrations/apify'
 import {
   MOCK_SLACK_SENDS,
+  SlackClient,
   SlackWebhookClient,
   resetMockSlackSends,
 } from '@spleed/integrations/slack'
@@ -62,6 +63,7 @@ import {
   processProfilerJob,
   type ProfilerJob,
 } from '../workers/profiler.worker'
+import { processConciergeJob } from '../workers/concierge.worker'
 
 // ─── Constants ────────────────────────────────────────────────────────
 
@@ -1308,6 +1310,65 @@ describe('Profiler — multi-tenant evidence_urls (Sprint 6b)', () => {
       .from(leadDossiersTable)
       .where(eq(leadDossiersTable.orgId, PROFILER_ORG_B))
     expect(dossiersFromB).toHaveLength(0)
+  })
+})
+
+// ─── 30. Sprint 7c — concierge ingest_source tracking ───────────────
+
+describe('processConciergeJob — Sprint 7c ingest_source tracking', () => {
+  it("tags ingest_source='slack_concierge' + writes a concierge_parse cost_event", async () => {
+    const slack = new SlackClient({ token: 'xoxb-test', mockMode: true })
+    const anthropic = new AnthropicClient({ apiKey: 'mock', mockMode: true })
+
+    const result = await processConciergeJob(
+      {
+        data: {
+          orgId: PROFILER_ORG_A,
+          slackChannelId: 'D_TEST',
+          slackUserId: 'U_TEST',
+          slackThreadTs: '1700000000.0007',
+          text: 'who is Sarah Chen from PulseAnalytics',
+        },
+      },
+      makeCtx(PROFILER_ORG_A),
+      { slack, anthropic },
+    )
+
+    // PROFILER_ORG_A has ICPs but none is default → the new lead is parked
+    // (no Profiler enqueue, so no Redis needed here). What we assert is the
+    // ingest_source tag + the concierge_parse cost_event.
+    expect(result.parseSucceeded).toBe(true)
+    expect(result.status).toBe('parked_no_icp')
+
+    const db = getServiceClient()
+    const [lead] = await db
+      .select()
+      .from(leadsTable)
+      .where(
+        and(
+          eq(leadsTable.orgId, PROFILER_ORG_A),
+          eq(leadsTable.companyDomain, 'pulseanalytics.com'),
+        ),
+      )
+    expect(lead?.ingestSource).toBe('slack_concierge')
+    expect(lead?.fullName).toBe('Sarah Chen')
+    expect(lead?.foundVia).toBe('manual_ingest')
+
+    // concierge_parse cost_event written (in addition to the standard Profiler
+    // costs a non-parked lead would later accrue downstream).
+    const parseEvents = await db
+      .select()
+      .from(costEvents)
+      .where(
+        and(
+          eq(costEvents.orgId, PROFILER_ORG_A),
+          eq(costEvents.agentType, 'concierge'),
+          eq(costEvents.operationType, 'concierge_parse'),
+        ),
+      )
+    expect(parseEvents).toHaveLength(1)
+    expect(parseEvents[0]?.provider).toBe('anthropic')
+    expect(parseEvents[0]?.success).toBe(true)
   })
 })
 

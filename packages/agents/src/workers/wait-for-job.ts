@@ -1,21 +1,23 @@
 /**
- * Sprint 7a — BullMQ job polling helper for synchronous-mode API
- * handlers (POST /api/leads/ingest?wait=true).
+ * BullMQ job polling helper for synchronous-mode callers (Sprint 7a).
  *
  * Polls a job by id until it reaches a terminal state ('completed' or
- * 'failed') or the timeout elapses. Default poll interval is 500ms;
- * Bun's setTimeout is fine here — these calls run on the API process,
- * not inside a worker.
+ * 'failed') or the timeout elapses. Used by the API's
+ * POST /api/leads/ingest?wait=true handler AND the concierge worker
+ * (Sprint 7c), which waits for the Profiler job it triggered before posting
+ * the dossier card back to Slack.
  *
- * The 90-second hard cap on timeoutMs protects against Bun.serve socket
- * timeouts and load-balancer ceilings. Mock-mode Profiler completes
- * within seconds; real-mode Sprint 7+ Apify/Anthropic calls may take
- * 60-90s during heavy load — caller chooses lower timeouts for tighter
- * UX (mobile network) and higher for desktop founder workflows.
+ * Relocated from apps/api/src/helpers (Sprint 7c CP3) so the concierge worker
+ * — which lives in this package and can't import from apps/api — can reuse
+ * the same wait semantics. Default poll interval 500ms.
+ *
+ * The 90-second hard cap callers apply protects against socket timeouts and
+ * load-balancer ceilings. Mock-mode Profiler completes within seconds; real-
+ * mode Apify/Anthropic calls may take 60-90s under load.
  */
 
 import { Queue, type JobType } from 'bullmq'
-import { getRedisConnection } from '@spleed/agents/workers'
+import { getRedisConnection } from './queue'
 
 export type WaitForJobResult =
   | { status: 'completed'; jobId: string }
@@ -31,9 +33,8 @@ export interface WaitForJobInput {
 }
 
 /**
- * Terminal states — Bun's setTimeout poll exits as soon as one is hit.
- * Other states ('waiting', 'active', 'delayed', etc.) loop until terminal
- * or timeout.
+ * Terminal states — the poll exits as soon as one is hit. Other states
+ * ('waiting', 'active', 'delayed', etc.) loop until terminal or timeout.
  */
 const TERMINAL_STATES = new Set<JobType | string>(['completed', 'failed'])
 

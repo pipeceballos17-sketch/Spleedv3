@@ -51,6 +51,16 @@ export const orgs = pgTable(
     // Full OAuth + interactive buttons → BACKLOG-035 Sprint 9.
     slackWebhookUrl: text('slack_webhook_url'),
 
+    // Sprint 7c — Slack OAuth-installed bot lookup columns. Coexist with
+    // slackWebhookUrl above: webhook = outgoing notifications, bot OAuth =
+    // bidirectional DM concierge. Real bot/user tokens live in Supabase
+    // Vault keyed by `slack_oauth_{orgId}` (org_integrations.vault_secret_id);
+    // these columns are the lookup index Slack event handlers use to map
+    // an incoming team_id → org_id.
+    slackTeamId: text('slack_team_id'),
+    slackBotUserId: text('slack_bot_user_id'),
+    slackConnectedAt: timestamp('slack_connected_at', { withTimezone: true }),
+
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

@@ -316,3 +316,41 @@ export interface SynthesizeFinalResult {
   costUsd: number
   latencyMs: number
 }
+
+// ─── Concierge parser (Sprint 7c — Slack DM NLP) ───────────────────
+
+/**
+ * Subset of POST /api/leads/ingest payload the concierge parser can
+ * populate from a free-text Slack DM. icpId never comes from parsing
+ * (assigned by the ingest endpoint via org default). Fields are nullable
+ * because Haiku may surface only some of them depending on what the
+ * founder typed.
+ */
+export interface ConciergePayload {
+  linkedinUrl: string | null
+  companyDomain: string | null
+  name: string | null
+  title: string | null
+  notes: string | null
+}
+
+export interface ParseConciergeQueryInput {
+  systemPrompt: string
+  userPrompt: string
+  /**
+   * Raw founder text — exposed to the mock for pattern matching. Live
+   * mode reads the same content from the userPrompt; the field is a
+   * lookup hint for deterministic test outputs.
+   */
+  textHint?: string
+}
+
+export interface ParseConciergeQueryResult {
+  payload: ConciergePayload
+  parseSucceeded: boolean
+  errorReason: string | null
+  tokensIn: number
+  tokensOut: number
+  costUsd: number
+  latencyMs: number
+}

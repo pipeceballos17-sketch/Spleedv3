@@ -1,4 +1,5 @@
 import type {
+  ConciergePayload,
   DeepResearchOutput,
   ExtractedCompanyWebsiteSignals,
   ExtractedLinkedinSignals,
@@ -1354,5 +1355,195 @@ export function mockSynthesizeFinal(input: {
     recommended_angle: recommendedAngle,
     pain_inferred: painInferred,
     confidence_score: Number(confidence.toFixed(2)),
+  }
+}
+
+// ─── Concierge parser (Sprint 7c) — Slack DM NLP mock ──────────────────
+
+/**
+ * Haiku 4.5 token estimates. System prompt + multilingual examples land
+ * around 500 input tokens; the JSON payload Haiku returns is ~80.
+ * Sprint 8 BACKLOG-027 (BYOK flip) keeps these constants for cost_events
+ * parity in tests; live mode reads usage from the SDK.
+ */
+export const MOCK_CONCIERGE_TOKENS_IN = 500
+export const MOCK_CONCIERGE_TOKENS_OUT = 80
+
+/**
+ * Deterministic 400-800ms band derived from text — same query yields the
+ * same latency. Haiku is faster than Sonnet so we land lower than the
+ * profiler band.
+ */
+export function mockConciergeLatencyMs(textHint: string): number {
+  const charSum = [...textHint].reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
+  return 400 + (charSum % 400)
+}
+
+/**
+ * Normalize a LinkedIn handle / partial URL into a canonical
+ * `https://linkedin.com/in/<slug>` form. Mock-side normalization mirrors
+ * what the live Haiku prompt is steered to do (the Examples in
+ * CONCIERGE_PARSER_PROMPT already emit canonical URLs).
+ */
+function canonicalLinkedin(handle: string): string {
+  const slug = handle
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^(www\.)?linkedin\.com\/in\//, '')
+    .replace(/^@/, '')
+    .replace(/\/$/, '')
+    .trim()
+  return `https://linkedin.com/in/${slug}`
+}
+
+/**
+ * Mock concierge parser. Pattern-matches the founder DM against the same
+ * shapes the Examples in CONCIERGE_PARSER_PROMPT cover, in priority order:
+ *
+ *   1. Explicit `linkedin.com/in/...` URL → linkedinUrl only
+ *   2. `@handle` token → linkedinUrl only
+ *   3. "who is X from/at Y" (EN) / "quien es X de Y" (ES) / "quem é X da/de Y" (PT)
+ *      → name + inferred companyDomain + optional notes/language tag
+ *   4. "just met X, runs Y, met at Z" → name + domain + notes
+ *   5. Otherwise — parseSucceeded false with errorReason
+ *
+ * Domain inference uses a tiny heuristic: lowercase, strip spaces, then
+ * pick a TLD by language hint (Spanish → .edu.co for educational keywords,
+ * else .com; Portuguese → .com.br; default → .com). This mirrors the
+ * prompt rules so live + mock outputs stay coherent for the demo lookups.
+ */
+export function mockParseConciergeQuery(text: string): {
+  payload: ConciergePayload
+  parseSucceeded: boolean
+  errorReason: string | null
+} {
+  const trimmed = text.trim()
+  if (trimmed.length === 0) {
+    return {
+      payload: { linkedinUrl: null, companyDomain: null, name: null, title: null, notes: null },
+      parseSucceeded: false,
+      errorReason: 'Empty query',
+    }
+  }
+
+  // 1. Explicit LinkedIn URL
+  const urlMatch = trimmed.match(/linkedin\.com\/in\/([A-Za-z0-9_\-]+)/i)
+  if (urlMatch) {
+    return {
+      payload: {
+        linkedinUrl: canonicalLinkedin(urlMatch[0]!),
+        companyDomain: null,
+        name: null,
+        title: null,
+        notes: null,
+      },
+      parseSucceeded: true,
+      errorReason: null,
+    }
+  }
+
+  // 2. @handle (must be a standalone token, not an email)
+  const handleMatch = trimmed.match(/(?:^|\s)@([A-Za-z0-9_\-]+)(?:\s|$)/)
+  if (handleMatch && !trimmed.includes('@gmail') && !trimmed.includes('@hotmail')) {
+    return {
+      payload: {
+        linkedinUrl: canonicalLinkedin(handleMatch[1]!),
+        companyDomain: null,
+        name: null,
+        title: null,
+        notes: null,
+      },
+      parseSucceeded: true,
+      errorReason: null,
+    }
+  }
+
+  const lower = trimmed.toLowerCase()
+  const isSpanish = /\b(quien|quién|del|de la)\b/.test(lower)
+  const isPortuguese = /\b(quem|é|da|do)\b/.test(lower) && !isSpanish
+  const languageNote = isSpanish ? 'Spanish query' : isPortuguese ? 'Portuguese query' : null
+
+  // domain inference by name token
+  const inferDomain = (companyToken: string): string => {
+    const slug = companyToken.toLowerCase().replace(/\s+/g, '').replace(/[^a-z0-9-]/g, '')
+    if (isPortuguese) return `${slug}.com.br`
+    if (isSpanish) {
+      if (/liceo|colegio|universidad|instituto|escuela/.test(companyToken.toLowerCase())) {
+        return `${slug}.edu.co`
+      }
+      return `${slug}.com`
+    }
+    return `${slug}.com`
+  }
+
+  // 3a. EN — "who is X from/at Y"
+  const enMatch = trimmed.match(/who\s+is\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*)\s+(?:from|at)\s+([A-Z][\w\s&-]+?)(?:[.,?!]|$)/i)
+  if (enMatch) {
+    return {
+      payload: {
+        linkedinUrl: null,
+        companyDomain: inferDomain(enMatch[2]!.trim()),
+        name: enMatch[1]!.trim(),
+        title: null,
+        notes: null,
+      },
+      parseSucceeded: true,
+      errorReason: null,
+    }
+  }
+
+  // 3b. ES — "quien es X de/del Y"
+  const esMatch = trimmed.match(/qui[eé]n\s+es\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)*)\s+(?:de(?:l)?|en)\s+([A-ZÁÉÍÓÚÑ][\w\sáéíóúñ&-]+?)(?:[.,?!]|$)/i)
+  if (esMatch) {
+    return {
+      payload: {
+        linkedinUrl: null,
+        companyDomain: inferDomain(esMatch[2]!.trim()),
+        name: esMatch[1]!.trim(),
+        title: null,
+        notes: languageNote,
+      },
+      parseSucceeded: true,
+      errorReason: null,
+    }
+  }
+
+  // 3c. PT — "quem é X da/de Y"
+  const ptMatch = trimmed.match(/quem\s+[ée]\s+([A-ZÁÉÍÓÚÃÕÇ][a-záéíóúãõç]+(?:\s+[A-ZÁÉÍÓÚÃÕÇ][a-záéíóúãõç]+)*)\s+(?:d[aoe]|na|no)\s+([A-ZÁÉÍÓÚÃÕÇ][\w\sáéíóúãõç&-]+?)(?:[.,?!]|$)/i)
+  if (ptMatch) {
+    return {
+      payload: {
+        linkedinUrl: null,
+        companyDomain: inferDomain(ptMatch[2]!.trim()),
+        name: ptMatch[1]!.trim(),
+        title: null,
+        notes: languageNote,
+      },
+      parseSucceeded: true,
+      errorReason: null,
+    }
+  }
+
+  // 4. "just met X, runs Y, met at Z" — comma-delimited freeform
+  const metMatch = trimmed.match(/(?:just\s+)?met\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)?),\s*runs\s+([A-Za-z][\w\s&-]+?)(?:,\s*(.+))?$/i)
+  if (metMatch) {
+    return {
+      payload: {
+        linkedinUrl: null,
+        companyDomain: inferDomain(metMatch[2]!.trim()),
+        name: metMatch[1]!.trim(),
+        title: null,
+        notes: metMatch[3]?.trim() ?? null,
+      },
+      parseSucceeded: true,
+      errorReason: null,
+    }
+  }
+
+  // 5. Ambiguous
+  return {
+    payload: { linkedinUrl: null, companyDomain: null, name: null, title: null, notes: null },
+    parseSucceeded: false,
+    errorReason: 'Too ambiguous — no identifiable lead in query',
   }
 }

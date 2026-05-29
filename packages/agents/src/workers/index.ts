@@ -3,12 +3,18 @@ import { closeRedisConnection } from './queue'
 import { helloWorldWorker } from './hello-world.worker'
 import { scoutWorker } from './scout.worker'
 import { profilerWorker } from './profiler.worker'
+import { conciergeWorker } from './concierge.worker'
 
 /**
  * Registry of all workers started by `startAllWorkers()`. Sprint 5+ appends
  * scout/profiler/composer/outreach/gifter/concierge workers here.
  */
-export const ALL_WORKERS = [helloWorldWorker, scoutWorker, profilerWorker] as const
+export const ALL_WORKERS = [
+  helloWorldWorker,
+  scoutWorker,
+  profilerWorker,
+  conciergeWorker,
+] as const
 
 export interface RunningWorkers {
   readonly count: number
@@ -52,3 +58,13 @@ export {
   type ProfilerResult,
   type ProcessProfilerJobOverrides,
 } from './profiler.worker'
+export {
+  conciergeWorker,
+  processConciergeJob,
+  ConciergeJobSchema,
+  type ConciergeJob,
+  type ConciergeResult,
+  type ProcessConciergeJobOverrides,
+} from './concierge.worker'
+export { enqueueConciergeJob } from '../queues/concierge.queue'
+export { waitForJob, type WaitForJobInput, type WaitForJobResult } from './wait-for-job'

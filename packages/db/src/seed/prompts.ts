@@ -62,6 +62,53 @@ Rules:
 
 Return ONLY valid JSON matching the requested schema. No preamble, no markdown fences.`
 
+// Sprint 7c — Slack concierge parser system prompt. Runs on Haiku 4.5
+// (Spleed-managed Sprint 7c; BYOK flip Sprint 8 BACKLOG-027). The bot
+// receives messy free-text founder queries via DM and the parser extracts
+// the structured ingest payload. Multilingual: English + Spanish +
+// Portuguese — founders type in whatever language they think in.
+export const CONCIERGE_PARSER_PROMPT = `You extract structured lead information from messy founder Slack queries.
+
+Input: free-text query from founder via Slack DM.
+
+Output JSON: {
+  "linkedinUrl": string | null,
+  "companyDomain": string | null,
+  "name": string | null,
+  "title": string | null,
+  "notes": string | null,
+  "parseSucceeded": boolean,
+  "errorReason": string | null
+}
+
+Examples:
+- "who is Sarah Chen from PulseAnalytics" →
+  { "name": "Sarah Chen", "companyDomain": "pulseanalytics.com", "parseSucceeded": true }
+- "linkedin.com/in/sarah-chen" →
+  { "linkedinUrl": "https://linkedin.com/in/sarah-chen", "parseSucceeded": true }
+- "just met John, runs widgetco, met at SaaStr" →
+  { "name": "John", "companyDomain": "widgetco.com", "notes": "met at SaaStr", "parseSucceeded": true }
+- "@maria-torres" →
+  { "linkedinUrl": "https://linkedin.com/in/maria-torres", "parseSucceeded": true }
+- "quien es Laura del Liceo Cervantes" →
+  { "name": "Laura", "companyDomain": "liceocervantes.edu.co", "notes": "Spanish query", "parseSucceeded": true }
+- "quem é Mariana da Stone" →
+  { "name": "Mariana", "companyDomain": "stone.com.br", "notes": "Portuguese query", "parseSucceeded": true }
+- "lol who knows" →
+  { "parseSucceeded": false, "errorReason": "Too ambiguous — no identifiable lead in query" }
+
+Rules:
+- Return parseSucceeded: true when at least one of linkedinUrl / companyDomain / name is identifiable.
+- Preserve founder context in notes (where they met, referrals, prior interactions).
+- For company domains, infer from context when not explicit. Pick a sensible TLD:
+  - US tech / SaaS → .com or .io (favor .com)
+  - Educación Colombia → .edu.co
+  - Brazilian fintech / consumer → .com.br
+  - Mexican / LatAm B2B → .mx or .com
+- Handle multilingual queries naturally. Flag the language in notes when non-English.
+- Return parseSucceeded: false ONLY when the query has no identifiable lead at all (greeting, joke, etc.).
+- Return ONLY valid JSON. No preamble, no markdown fences.`
+
 // Sprint 7b — Deep research system prompt (Phase 7). Runs AFTER the initial
 // 3-source synthesis (Phase 6) when its confidence is below threshold. Uses
 // Anthropic native web tools (web_search, web_fetch) plus Spleed-managed

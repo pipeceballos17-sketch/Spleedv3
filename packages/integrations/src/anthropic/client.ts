@@ -1,10 +1,12 @@
 import {
+  mockConciergeLatencyMs,
   mockExtractCompanyWebsiteSignals,
   mockExtractLinkedinSignals,
   mockExtractNewsSignals,
   mockLatencyMs,
   mockLinkedinLatencyMs,
   mockNewsLatencyMs,
+  mockParseConciergeQuery,
   mockProfilerLatencyMs,
   mockResearchDeep,
   mockScoreLead,
@@ -12,6 +14,8 @@ import {
   mockSynthesisLatencyMs,
   mockSynthesizeDossier,
   mockSynthesizeFinal,
+  MOCK_CONCIERGE_TOKENS_IN,
+  MOCK_CONCIERGE_TOKENS_OUT,
   MOCK_SYNTHESIS_FINAL_TOKENS_IN,
   MOCK_SYNTHESIS_FINAL_TOKENS_OUT,
   MOCK_LINKEDIN_TOKENS_IN,
@@ -33,6 +37,8 @@ import type {
   ExtractNewsSignalsInput,
   ExtractNewsSignalsResult,
   DeepResearchOutput,
+  ParseConciergeQueryInput,
+  ParseConciergeQueryResult,
   ResearchDeepInput,
   ScoreLeadInput,
   ScoreLeadResult,
@@ -390,6 +396,54 @@ export class AnthropicClient {
   ): Promise<SynthesizeFinalResult> {
     throw new Error(
       '[anthropic] final synthesis live mode not implemented in Sprint 7b — wire real client in Sprint 8+ with BYOK (BACKLOG-027)',
+    )
+  }
+
+  // ─── Concierge parser (Sprint 7c — Slack DM NLP) ─────────────────
+
+  /**
+   * Parse a free-text founder DM into the structured ingest payload. Runs
+   * on Haiku 4.5 (cost-sensitive, ~500/80 tokens per call) regardless of
+   * this client's default model — Sprint 7c is Spleed-managed (single
+   * Anthropic key); Sprint 8 BACKLOG-027 flips to per-tenant BYOK.
+   *
+   * Caller (agents concierge/parser.ts) builds both prompts and forwards
+   * the raw founder text via textHint for deterministic mock lookup.
+   */
+  async parseConciergeQuery(
+    input: ParseConciergeQueryInput,
+  ): Promise<ParseConciergeQueryResult> {
+    if (this.mockMode) {
+      return this.parseConciergeQueryMock(input)
+    }
+    return this.parseConciergeQueryLive(input)
+  }
+
+  private async parseConciergeQueryMock(
+    input: ParseConciergeQueryInput,
+  ): Promise<ParseConciergeQueryResult> {
+    const text = input.textHint ?? input.userPrompt
+    const { payload, parseSucceeded, errorReason } = mockParseConciergeQuery(text)
+    const tokensIn = MOCK_CONCIERGE_TOKENS_IN
+    const tokensOut = MOCK_CONCIERGE_TOKENS_OUT
+    const latencyMs = mockConciergeLatencyMs(text)
+    // Concierge is pinned to Haiku — ignore this.model so callers using a
+    // Sonnet-default client (the worker) still get Haiku-rate cost metrics.
+    const costUsd = computeCostUsd('claude-haiku-4-5', tokensIn, tokensOut)
+    return { payload, parseSucceeded, errorReason, tokensIn, tokensOut, costUsd, latencyMs }
+  }
+
+  private async parseConciergeQueryLive(
+    _input: ParseConciergeQueryInput,
+  ): Promise<ParseConciergeQueryResult> {
+    // Sprint 8+: wire to @anthropic-ai/sdk Messages.create with model
+    // claude-haiku-4-5 and system prompt CONCIERGE_PARSER_PROMPT (cache_
+    // control: ephemeral — system prompt is stable per-tenant so prompt-
+    // cache amortization across multiple DMs from the same founder is
+    // meaningful). Parse the JSON payload; on parse failure return
+    // parseSucceeded=false with errorReason='JSON parse error'.
+    throw new Error(
+      '[anthropic] concierge parser live mode not implemented in Sprint 7c — wire real Haiku 4.5 call in Sprint 8+ when BYOK lands (BACKLOG-027)',
     )
   }
 }

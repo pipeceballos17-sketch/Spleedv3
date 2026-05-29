@@ -1,8 +1,17 @@
-import { MOCK_SLACK_SENDS } from './mock'
+import {
+  MOCK_SLACK_SENDS,
+  mockExchangeOAuthCode,
+  mockGetUserInfo,
+  mockPostMessage,
+} from './mock'
 import type {
   QuotaExhaustedPayload,
   ScoutFailurePayload,
+  SlackOAuthExchangeResult,
+  SlackPostMessageInput,
+  SlackPostMessageResult,
   SlackSendResult,
+  SlackUserInfo,
 } from './types'
 
 /**
@@ -85,5 +94,121 @@ export class SlackWebhookClient {
       // without notification. Return success=false so callers can log.
       return { success: false }
     }
+  }
+}
+
+// ─── Sprint 7c — OAuth-installed bot client ────────────────────────
+
+export interface SlackClientConfig {
+  /**
+   * Bot user OAuth token (xoxb-*). Per-tenant in production: loaded from
+   * Supabase Vault keyed by `slack_oauth_{orgId}`. Empty string is
+   * tolerated in mock mode (the mock never hits Slack).
+   */
+  token: string
+  /**
+   * Force mock mode. Default: `process.env.SLACK_LIVE !== 'true'` AND
+   * `process.env.NODE_ENV === 'test'`. Sprint 7c ships only the mock path;
+   * live mode wires Sprint 8+ once concierge customers come online.
+   */
+  mockMode?: boolean
+}
+
+/**
+ * Slack OAuth-installed bot client (Sprint 7c). Coexists with
+ * `SlackWebhookClient` above: the webhook is the simple outgoing-only
+ * channel (Sprint 5b Scout failure notifications); this class is the
+ * bidirectional DM concierge bot that handles founder queries, posts
+ * Block Kit messages, and exchanges OAuth codes for installation tokens.
+ *
+ * Mock-default per the uniform pattern (Apollo, Anthropic, Apify,
+ * Vercel-browser, Storage, Deep Research — Slack OAuth makes 7).
+ */
+export class SlackClient {
+  // Stored for the live path (Sprint 8+); unused in mock mode but kept
+  // accessible so a future override doesn't need a constructor signature
+  // change. `_` prefix marks intentional non-use in mock-only Sprint 7c.
+  private readonly _token: string
+  private readonly mockMode: boolean
+
+  constructor(config: SlackClientConfig) {
+    this._token = config.token
+    this.mockMode = config.mockMode ?? isMockByDefault()
+
+    if (this.mockMode && process.env.NODE_ENV !== 'test') {
+      console.log('[slack-bot] MOCK MODE ACTIVE — set SLACK_LIVE=true to call real Slack API')
+    }
+  }
+
+  /**
+   * Post a Block Kit (or text) message to a channel or DM. Returns the
+   * message ts so threaded replies can anchor on it.
+   */
+  async postMessage(input: SlackPostMessageInput): Promise<SlackPostMessageResult> {
+    if (this.mockMode) {
+      return mockPostMessage(input)
+    }
+    return this.postMessageLive(input)
+  }
+
+  /**
+   * Exchange a Slack OAuth code for installation tokens. Called by the
+   * `/api/slack/oauth/callback` route during workspace install.
+   */
+  async exchangeOAuthCode(
+    code: string,
+    _redirectUri: string,
+  ): Promise<SlackOAuthExchangeResult> {
+    if (this.mockMode) {
+      return mockExchangeOAuthCode(code)
+    }
+    return this.exchangeOAuthCodeLive(code, _redirectUri)
+  }
+
+  /**
+   * Fetch user info — used by the concierge worker to distinguish founder
+   * messages from bot messages (and to surface real_name in logs).
+   */
+  async getUserInfo(userId: string): Promise<SlackUserInfo> {
+    if (this.mockMode) {
+      return mockGetUserInfo(userId)
+    }
+    return this.getUserInfoLive(userId)
+  }
+
+  // ─── Live stubs (Sprint 7c — defer to Sprint 8+) ─────────────────
+
+  private async postMessageLive(_input: SlackPostMessageInput): Promise<SlackPostMessageResult> {
+    // Sprint 8+: POST https://slack.com/api/chat.postMessage with
+    // Authorization: Bearer ${this._token}. Body is JSON-encoded
+    // { channel, text?, blocks?, thread_ts? }. Slack returns
+    // { ok, ts, channel } — map directly. On `ok=false`, throw a tagged
+    // error so withTransientRetry can retry rate_limited / fail PERMANENT
+    // on invalid_auth.
+    throw new Error(
+      '[slack-bot] live mode not implemented in Sprint 7c — wire chat.postMessage in Sprint 8+ when concierge customers come online',
+    )
+  }
+
+  private async exchangeOAuthCodeLive(
+    _code: string,
+    _redirectUri: string,
+  ): Promise<SlackOAuthExchangeResult> {
+    // Sprint 8+: POST https://slack.com/api/oauth.v2.access with
+    // client_id, client_secret (from env), code, redirect_uri. Returns
+    // { access_token, team, authed_user } — extract bot_token from
+    // access_token (when token_type='bot') or the secondary
+    // app-level token field per Slack's v2 spec.
+    throw new Error(
+      '[slack-bot] live mode not implemented in Sprint 7c — wire oauth.v2.access in Sprint 8+',
+    )
+  }
+
+  private async getUserInfoLive(_userId: string): Promise<SlackUserInfo> {
+    // Sprint 8+: GET https://slack.com/api/users.info?user=${userId} with
+    // Authorization: Bearer ${this._token}.
+    throw new Error(
+      '[slack-bot] live mode not implemented in Sprint 7c — wire users.info in Sprint 8+',
+    )
   }
 }

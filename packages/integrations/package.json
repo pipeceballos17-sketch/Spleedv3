@@ -15,6 +15,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "bun test src/",
     "clean": "rm -rf .turbo *.tsbuildinfo"
   },
   "dependencies": {
