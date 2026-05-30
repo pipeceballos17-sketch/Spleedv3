@@ -28,6 +28,25 @@ import {
   MOCK_SYNTHESIS_TOKENS_OUT,
   MOCK_TOKENS_IN,
   MOCK_TOKENS_OUT,
+  mockSelectHook,
+  mockGenerateAngle,
+  mockComposeDraft,
+  mockCheckQuality,
+  mockGenerateIcpStarterGuidance,
+  mockComposerLatencyMs,
+  mockRecommendChannel,
+  MOCK_CHANNEL_REC_TOKENS_IN,
+  MOCK_CHANNEL_REC_TOKENS_OUT,
+  MOCK_COMPOSER_HOOK_TOKENS_IN,
+  MOCK_COMPOSER_HOOK_TOKENS_OUT,
+  MOCK_COMPOSER_ANGLE_TOKENS_IN,
+  MOCK_COMPOSER_ANGLE_TOKENS_OUT,
+  MOCK_COMPOSER_DRAFT_TOKENS_IN,
+  MOCK_COMPOSER_DRAFT_TOKENS_OUT,
+  MOCK_COMPOSER_QUALITY_TOKENS_IN,
+  MOCK_COMPOSER_QUALITY_TOKENS_OUT,
+  MOCK_ICP_STARTER_TOKENS_IN,
+  MOCK_ICP_STARTER_TOKENS_OUT,
 } from './mock'
 import type {
   ExtractCompanyWebsiteSignalsInput,
@@ -47,6 +66,19 @@ import type {
   SynthesizeDossierResult,
   SynthesizeFinalInput,
   SynthesizeFinalResult,
+  SelectHookInput,
+  SelectHookResult,
+  GenerateAngleInput,
+  GenerateAngleResult,
+  ComposeDraftInput,
+  ComposeDraftResult,
+  CheckQualityInput,
+  CheckQualityResult,
+  GenerateIcpStarterGuidanceInput,
+  GenerateIcpStarterGuidanceResult,
+  TestConnectionResult,
+  RecommendChannelInput,
+  RecommendChannelResult,
 } from './types'
 
 export interface AnthropicClientConfig {
@@ -60,6 +92,13 @@ export interface AnthropicClientConfig {
    * the real client (Sprint 7 wires it; today the live path throws loud).
    */
   mockMode?: boolean
+  /**
+   * Sprint 8.2 BYOK — when set AND ANTHROPIC_LIVE=true, the live paths resolve
+   * this tenant's key from Vault (getAnthropicApiKey) instead of `apiKey`.
+   * Stored only; key resolution wires in Sprint 9+ (live SDK). Mock mode
+   * ignores it (Sprint 7c legacy behavior preserved when omitted).
+   */
+  orgId?: string
 }
 
 /**
@@ -110,11 +149,14 @@ export class AnthropicClient {
   readonly model: ScoutLlmModel
   private readonly apiKey: string
   private readonly mockMode: boolean
+  /** Sprint 8.2 BYOK — tenant for live Vault key resolution (Sprint 9+). */
+  private readonly orgId?: string
 
   constructor(config: AnthropicClientConfig) {
     this.apiKey = config.apiKey
     this.model = config.model ?? defaultModel()
     this.mockMode = config.mockMode ?? isMockByDefault()
+    this.orgId = config.orgId
 
     if (this.mockMode && process.env.NODE_ENV !== 'test') {
       console.log(
@@ -444,6 +486,146 @@ export class AnthropicClient {
     // parseSucceeded=false with errorReason='JSON parse error'.
     throw new Error(
       '[anthropic] concierge parser live mode not implemented in Sprint 7c — wire real Haiku 4.5 call in Sprint 8+ when BYOK lands (BACKLOG-027)',
+    )
+  }
+
+  // ─── Composer (Sprint 8) — 4-step draft pipeline ─────────────────
+  //
+  // Four sequential calls per draft (hook selection → angle → composition →
+  // quality check). Each runs on this.model (claude-sonnet-4-6 default —
+  // quality-critical per CLAUDE.md). Mock-default; live throws until BYOK +
+  // real SDK wiring (Sprint 8.2+). Callers (agents composer/*) build prompts
+  // and pass domainHint for deterministic mock lookup.
+
+  async selectHook(input: SelectHookInput): Promise<SelectHookResult> {
+    if (this.mockMode) return this.selectHookMock(input)
+    return this.composerLiveStub('selectHook')
+  }
+
+  async generateAngle(input: GenerateAngleInput): Promise<GenerateAngleResult> {
+    if (this.mockMode) return this.generateAngleMock(input)
+    return this.composerLiveStub('generateAngle')
+  }
+
+  async composeDraft(input: ComposeDraftInput): Promise<ComposeDraftResult> {
+    if (this.mockMode) return this.composeDraftMock(input)
+    return this.composerLiveStub('composeDraft')
+  }
+
+  async checkQuality(input: CheckQualityInput): Promise<CheckQualityResult> {
+    if (this.mockMode) return this.checkQualityMock(input)
+    return this.composerLiveStub('checkQuality')
+  }
+
+  /**
+   * Hermes ICP starter generator (Decision 10). Generates voice + footer
+   * guidance from an ICP description. Mock keyword-matches the description;
+   * live (Sprint 8.2+) wires a single Sonnet call.
+   */
+  async generateIcpStarterGuidance(
+    input: GenerateIcpStarterGuidanceInput,
+  ): Promise<GenerateIcpStarterGuidanceResult> {
+    if (this.mockMode) {
+      const guidance = mockGenerateIcpStarterGuidance(input.icpDescriptionHint)
+      const tokensIn = MOCK_ICP_STARTER_TOKENS_IN
+      const tokensOut = MOCK_ICP_STARTER_TOKENS_OUT
+      const latencyMs = mockComposerLatencyMs(input.icpDescriptionHint ?? input.userPrompt, 0)
+      const costUsd = computeCostUsd(this.model, tokensIn, tokensOut)
+      return { guidance, tokensIn, tokensOut, costUsd, latencyMs }
+    }
+    return this.composerLiveStub('generateIcpStarterGuidance')
+  }
+
+  // ─── Composer mock implementations ───────────────────────────────
+
+  private async selectHookMock(input: SelectHookInput): Promise<SelectHookResult> {
+    const selectedHooks = mockSelectHook(input.domainHint)
+    const tokensIn = MOCK_COMPOSER_HOOK_TOKENS_IN
+    const tokensOut = MOCK_COMPOSER_HOOK_TOKENS_OUT
+    const latencyMs = mockComposerLatencyMs(input.domainHint ?? input.userPrompt, 0)
+    const costUsd = computeCostUsd(this.model, tokensIn, tokensOut)
+    return { selectedHooks, tokensIn, tokensOut, costUsd, latencyMs }
+  }
+
+  private async generateAngleMock(input: GenerateAngleInput): Promise<GenerateAngleResult> {
+    const angle = mockGenerateAngle(input.domainHint)
+    const tokensIn = MOCK_COMPOSER_ANGLE_TOKENS_IN
+    const tokensOut = MOCK_COMPOSER_ANGLE_TOKENS_OUT
+    const latencyMs = mockComposerLatencyMs(input.domainHint ?? input.userPrompt, 1)
+    const costUsd = computeCostUsd(this.model, tokensIn, tokensOut)
+    return { angle, tokensIn, tokensOut, costUsd, latencyMs }
+  }
+
+  private async composeDraftMock(input: ComposeDraftInput): Promise<ComposeDraftResult> {
+    const draft = mockComposeDraft(input.domainHint, input.channel)
+    const tokensIn = MOCK_COMPOSER_DRAFT_TOKENS_IN
+    const tokensOut = MOCK_COMPOSER_DRAFT_TOKENS_OUT
+    const latencyMs = mockComposerLatencyMs(input.domainHint ?? input.userPrompt, 2)
+    const costUsd = computeCostUsd(this.model, tokensIn, tokensOut)
+    return { draft, tokensIn, tokensOut, costUsd, latencyMs }
+  }
+
+  private async checkQualityMock(input: CheckQualityInput): Promise<CheckQualityResult> {
+    const verdict = mockCheckQuality(input.domainHint)
+    const tokensIn = MOCK_COMPOSER_QUALITY_TOKENS_IN
+    const tokensOut = MOCK_COMPOSER_QUALITY_TOKENS_OUT
+    const latencyMs = mockComposerLatencyMs(input.domainHint ?? input.userPrompt, 3)
+    const costUsd = computeCostUsd(this.model, tokensIn, tokensOut)
+    return { verdict, tokensIn, tokensOut, costUsd, latencyMs }
+  }
+
+  private async composerLiveStub(method: string): Promise<never> {
+    // Sprint 8.2+: wire @anthropic-ai/sdk Messages.create on this.model with
+    // the per-step system prompt (cache_control: ephemeral) + per-tenant BYOK
+    // key from Vault (this.orgId → orgs.anthropic_vault_ref). Parse JSON; on
+    // failure the Composer agent surfaces failed_quality so the caller can
+    // regenerate.
+    throw new Error(
+      `[anthropic] composer.${method} live mode not implemented in Sprint 8.1 — wire real Sonnet call in Sprint 8.2+ with BYOK`,
+    )
+  }
+
+  // ─── Composer Phase 0 — channel recommendation (Sprint 8.2) ──────
+
+  async recommendChannel(input: RecommendChannelInput): Promise<RecommendChannelResult> {
+    if (this.mockMode) {
+      const recommendation = mockRecommendChannel({
+        preferredChannel: input.preferredChannel,
+        contactData: input.contactData,
+      })
+      const tokensIn = MOCK_CHANNEL_REC_TOKENS_IN
+      const tokensOut = MOCK_CHANNEL_REC_TOKENS_OUT
+      const latencyMs = mockComposerLatencyMs(input.domainHint ?? input.userPrompt, 0)
+      const costUsd = computeCostUsd(this.model, tokensIn, tokensOut)
+      return { recommendation, contactData: input.contactData, tokensIn, tokensOut, costUsd, latencyMs }
+    }
+    return this.composerLiveStub('recommendChannel')
+  }
+
+  // ─── BYOK connection test (Sprint 8.2 — Decision 9) ──────────────
+
+  /**
+   * Verify a tenant-supplied API key. Mock-default: accepts `sk-ant-test-*`
+   * (returns plan 'Pro'); any other shape fails CONNECTION_FAILED. Live
+   * (Sprint 9+) makes a minimal Haiku Messages call with the supplied key and
+   * maps a 401 → INVALID_KEY, other failures → CONNECTION_FAILED.
+   */
+  async testConnection(apiKey: string): Promise<TestConnectionResult> {
+    if (this.mockMode) {
+      if (/^sk-ant-test-/.test(apiKey)) {
+        return { ok: true, planDetected: 'Pro' }
+      }
+      return { ok: false, error: 'CONNECTION_FAILED' }
+    }
+    return this.testConnectionLive(apiKey)
+  }
+
+  private async testConnectionLive(_apiKey: string): Promise<TestConnectionResult> {
+    // Sprint 9+: POST https://api.anthropic.com/v1/messages with the supplied
+    // key, model claude-haiku-4-5, max_tokens 10, a 1-token "ping". 200 → ok;
+    // 401 → INVALID_KEY; network/5xx → CONNECTION_FAILED.
+    throw new Error(
+      '[anthropic] testConnection live mode not implemented in Sprint 8.2 — wire real Messages ping in Sprint 9+',
     )
   }
 }

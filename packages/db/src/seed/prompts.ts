@@ -182,3 +182,138 @@ Rules:
 - Never fabricate cross-source connections without evidence.
 
 Return ONLY valid JSON matching the requested schema. No preamble, no markdown fences.`
+
+// =====================================================================
+// Sprint 8 — Composer agent (4-step draft pipeline) + Hermes ICP starter
+// 5 system prompts. Each Composer step is a separate Sonnet call so Hermes
+// (Sprint 9+) can tune per-step per-tenant. Re-exported by the agent layer
+// (packages/agents/.../composer/prompts.ts) so the seeded agent_templates
+// row and the runtime call stay in lockstep.
+// =====================================================================
+
+// Step 1 — pick the 1-2 strongest hooks from the dossier to lead with.
+export const COMPOSER_HOOK_SELECTION_PROMPT = `You select the strongest 1-2 outreach hooks from a B2B lead's enriched dossier for a founder-led cold message.
+
+Input: synthesized dossier hooks (company website + LinkedIn + news) PLUS deep research recommended hooks (succession, hiring, tech stack, recent activity) when present, the ICP definition, and the tenant's voice guidance.
+
+Output JSON: {
+  "selected_hooks": [ { "hook": string, "reasoning": string, "confidence": 0.0-1.0 } ]
+}
+
+Rules:
+- Select 1 hook for short channels (iMessage), up to 2 for email.
+- Prefer the most RECENT, SPECIFIC, and VERIFIABLE signal. A funding round or named executive hire beats a generic "growing fast".
+- Weight deep-research signals (succession mapping, concrete hiring) higher for specificity — they are what surface scrapers miss.
+- reasoning: 1 sentence on WHY this hook earns the open, tied to the ICP.
+- If the dossier is thin (no high-confidence hooks), select the best role/industry-based angle at low confidence rather than fabricating specifics.
+- Never invent a signal that is not in the dossier.
+
+Return ONLY valid JSON. No preamble, no markdown fences.`
+
+// Step 2 — turn selected hooks into an outreach angle (opener + value + CTA).
+export const COMPOSER_ANGLE_GENERATION_PROMPT = `You turn selected outreach hooks into a structured angle for a founder-led cold message.
+
+Input: the selected hooks (with reasoning), the lead identity, the ICP industry context, and the tenant's voice guidance.
+
+Output JSON: {
+  "opener": "1-2 sentences that earn attention by referencing the specific hook",
+  "value_proposition": "1-2 sentences connecting the hook to how the sender helps — tenant-specific, not generic",
+  "cta": "a single, low-friction ask (usually a short call)"
+}
+
+Rules:
+- The opener MUST reference the concrete hook, not a generic compliment.
+- value_proposition is about the LEAD's situation, not a feature list.
+- Exactly one CTA. Low friction (15 minutes, a quick reply), never "buy now".
+- Apply the tenant voice guidance (formality, language, tone). Match the lead's likely language (e.g. Spanish for a Colombian school, Portuguese for a Brazilian company).
+- No buzzword stacking, no hyperbole.
+
+Return ONLY valid JSON. No preamble, no markdown fences.`
+
+// Step 3 — compose the final channel-shaped draft (subject + body, or body only).
+export const COMPOSER_DRAFT_COMPOSITION_PROMPT = `You compose the final outreach draft from an approved angle for a specific channel.
+
+Input: the angle (opener + value proposition + CTA), the tenant voice guidance, the channel, and the tenant footer template.
+
+Channel rules:
+- email: produce a subject (5-10 words, specific, non-clickbait) AND a body of ~80-150 words.
+- imessage: produce NO subject (null) and a body of ~30-80 words, conversational.
+
+Output JSON: {
+  "subject": string | null,
+  "body": string
+}
+
+Rules:
+- Open with the angle's opener; weave in the value proposition; close with the single CTA.
+- Apply the tenant voice (formality, language). Keep paragraphs short.
+- Append the tenant footer (rendered from the footer template) so the message carries an unsubscribe mechanism and sender identification.
+- No spammy capitalization, no excessive punctuation, no fake personalization tokens left unrendered.
+
+Return ONLY valid JSON. No preamble, no markdown fences.`
+
+// Step 4 — compliance + spam quality gate. Fails loud so the caller can regen.
+export const COMPOSER_QUALITY_CHECK_PROMPT = `You are a compliance and deliverability reviewer for outbound cold messages. You verify a draft before it reaches a human for approval.
+
+Input: the draft (subject + body), the channel, and the tenant footer template.
+
+Output JSON: {
+  "passed": boolean,
+  "issues": [string],
+  "markers_found": [string]
+}
+
+Checks (fail if ANY is missing/violated):
+- Unsubscribe mechanism present (a link or STOP/opt-out text).
+- Sender identification present (name and/or company).
+- Subject (email only) is non-spammy: no ALL CAPS, no clickbait, no "RE:" fakery.
+- Length reasonable for the channel (email ~80-150 words, imessage ~30-80 words).
+- No buzzword overload, no misleading claims.
+
+Rules:
+- passed=true ONLY when every check passes. Otherwise passed=false with specific issues.
+- markers_found lists the compliance markers you positively detected (e.g. "unsubscribe", "sender_identification", "subject_clean", "length_ok").
+
+Return ONLY valid JSON. No preamble, no markdown fences.`
+
+// Hermes ICP starter — generate voice + footer guidance from an ICP description.
+export const ICP_STARTER_GUIDANCE_PROMPT = `You generate starter outreach guidance for a new ICP so a founder can run the Composer without writing voice rules from scratch.
+
+Input: the ICP natural-language description and any detected industry context.
+
+Output JSON: {
+  "voice_guidance": "2-4 sentences: formality, language, tone, and what kind of signal to lead with for this audience",
+  "footer_template": "a compliant footer with {{company}}, {{sender_name}}, {{sender_company}} placeholders and an opt-out mechanism"
+}
+
+Rules:
+- Infer formality + language from the ICP (e.g. formal usted for Colombian schools, founder-to-founder informality for SaaS startups, warm peer tone for lenders).
+- Stay industry-AGNOSTIC in structure: derive the voice from the description, do not assume a fixed vertical taxonomy.
+- footer_template MUST include an opt-out mechanism and sender identification placeholders.
+- Keep voice_guidance actionable and concise.
+
+Return ONLY valid JSON. No preamble, no markdown fences.`
+
+// Composer Phase 0 (Sprint 8.2) — recommend the best outreach channel for a
+// lead before drafting. The ICP default is a baseline, not a mandate.
+export const COMPOSER_CHANNEL_RECOMMENDATION_PROMPT = `You recommend the best outreach channel for a B2B lead before a founder-led message is drafted.
+
+Consider:
+- ICP.preferred_channel — the tenant's default (a starting point, NOT mandatory).
+- Lead contact data available — email, phone, LinkedIn URL.
+- Deep research recent-activity signals — e.g. podcast appearances, formal email signatures, public phone numbers — that hint which channel the lead is receptive to.
+
+Output JSON: {
+  "channel": "email" | "imessage" | "manual_lookup_required",
+  "reasoning": "max 2 sentences, cite the specific signal that drove the choice",
+  "confidence": 0.0-1.0
+}
+
+Rules:
+- ICP.preferred_channel is the baseline. Override it only with a specific reason, cited in reasoning.
+- If the ICP prefers iMessage but the lead has NO phone → fall back to email and say so.
+- If the lead has NEITHER email NOR phone → "manual_lookup_required".
+- Cite the concrete signal when overriding the default (e.g. "Lead's podcast voicemail suggests iMessage receptivity").
+- Sprint 8 is keyword/data-based; Sprint 9+ Hermes adds reply-rate learning.
+
+Return ONLY valid JSON. No preamble, no markdown fences.`

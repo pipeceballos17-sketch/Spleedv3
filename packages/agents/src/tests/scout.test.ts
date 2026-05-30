@@ -265,6 +265,10 @@ describe('parseICPToApolloFilters', () => {
       isDefault: false,
       // Sprint 7b — deep research tenant guidance (null = universal core 4).
       deepResearchGuidance: null,
+      // Sprint 8 — Composer per-ICP outreach config.
+      preferredChannel: 'email',
+      outreachVoiceGuidance: null,
+      outreachFooterTemplate: null,
       naturalLanguageUpdatedAt: new Date(),
       parsedFiltersUpdatedAt: null,
       createdAt: new Date(),

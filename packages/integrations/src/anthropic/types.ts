@@ -354,3 +354,174 @@ export interface ParseConciergeQueryResult {
   costUsd: number
   latencyMs: number
 }
+
+// ─── Composer (Sprint 8) — 4-step draft pipeline + ICP starter ──────
+//
+// Leaf I/O contracts for the four Composer LLM calls + the Hermes ICP
+// starter generator. The agent layer (packages/agents/.../composer)
+// builds the prompts and orchestrates the steps; these types name what
+// each AnthropicClient method consumes/returns. Composer runs on the
+// client's default model (claude-sonnet-4-6 — quality-critical per
+// CLAUDE.md); cost derives from the standard per-model rates.
+
+export type ComposerChannel = 'email' | 'imessage'
+
+/**
+ * A hook candidate fed into selection — union of the synthesized dossier
+ * hooks (Phase 6/8) and the deep-research recommended hooks (Phase 7).
+ * sourceName carries the provenance so selection can weight deep_research.
+ */
+export interface ComposerHookCandidate {
+  hook: string
+  evidence: string
+  sourceName: ProfilerSourceName
+  confidence: number
+}
+
+// Step 1 — hook selection
+export interface SelectHookInput {
+  systemPrompt: string
+  userPrompt: string
+  /** Mock lookup hint — pass `lead.companyDomain`. */
+  domainHint?: string
+}
+export interface SelectedHook {
+  hook: string
+  reasoning: string
+  confidence: number
+}
+export interface SelectHookResult {
+  /** Top 1-2 hooks the draft will lead with. */
+  selectedHooks: SelectedHook[]
+  tokensIn: number
+  tokensOut: number
+  costUsd: number
+  latencyMs: number
+}
+
+// Step 2 — angle generation
+export interface GenerateAngleInput {
+  systemPrompt: string
+  userPrompt: string
+  domainHint?: string
+}
+export interface OutreachAngle {
+  opener: string
+  valueProposition: string
+  cta: string
+}
+export interface GenerateAngleResult {
+  angle: OutreachAngle
+  tokensIn: number
+  tokensOut: number
+  costUsd: number
+  latencyMs: number
+}
+
+// Step 3 — draft composition (channel-shaped)
+export interface ComposeDraftInput {
+  systemPrompt: string
+  userPrompt: string
+  /** Drives length + whether a subject is produced. */
+  channel: ComposerChannel
+  domainHint?: string
+}
+export interface ComposedDraft {
+  /** NULL for iMessage (body-only). */
+  subject: string | null
+  body: string
+}
+export interface ComposeDraftResult {
+  draft: ComposedDraft
+  tokensIn: number
+  tokensOut: number
+  costUsd: number
+  latencyMs: number
+}
+
+// Step 4 — quality / compliance check
+export interface CheckQualityInput {
+  systemPrompt: string
+  userPrompt: string
+  channel: ComposerChannel
+  domainHint?: string
+}
+export interface QualityVerdict {
+  passed: boolean
+  /** Human-readable problems (empty when passed). */
+  issues: string[]
+  /** Compliance markers detected (e.g. 'unsubscribe', 'sender_identification'). */
+  markersFound: string[]
+}
+export interface CheckQualityResult {
+  verdict: QualityVerdict
+  tokensIn: number
+  tokensOut: number
+  costUsd: number
+  latencyMs: number
+}
+
+// Hermes ICP starter generator (Decision 10)
+export interface GenerateIcpStarterGuidanceInput {
+  systemPrompt: string
+  userPrompt: string
+  /** Mock lookup hint — the raw ICP description (keyword-matched). */
+  icpDescriptionHint?: string
+}
+export interface IcpStarterGuidance {
+  voiceGuidance: string
+  footerTemplate: string
+}
+export interface GenerateIcpStarterGuidanceResult {
+  guidance: IcpStarterGuidance
+  tokensIn: number
+  tokensOut: number
+  costUsd: number
+  latencyMs: number
+}
+
+// ─── BYOK connection test (Sprint 8.2 — Decision 9) ─────────────────
+
+export interface TestConnectionResult {
+  ok: boolean
+  /** Detected plan tier when the API exposes it; null in mock / unknown. */
+  planDetected?: 'Pro' | 'Max' | 'Team' | null
+  /** Set when ok=false. */
+  error?: 'INVALID_KEY' | 'CONNECTION_FAILED'
+}
+
+// ─── Composer Phase 0 — channel recommendation (Sprint 8.2) ─────────
+
+export interface ComposerContactData {
+  email?: string | null
+  phone?: string | null
+  linkedinUrl?: string | null
+}
+
+/** 'manual_lookup_required' short-circuits the Composer (no draft created). */
+export type RecommendedChannel = 'email' | 'imessage' | 'manual_lookup_required'
+
+export interface RecommendChannelInput {
+  systemPrompt: string
+  userPrompt: string
+  /** ICP default channel — the baseline the recommender may override. */
+  preferredChannel: ComposerChannel
+  contactData: ComposerContactData
+  domainHint?: string
+}
+
+export interface ChannelRecommendation {
+  channel: RecommendedChannel
+  reasoning: string
+  confidence: number
+}
+
+export interface RecommendChannelResult {
+  recommendation: ChannelRecommendation
+  /** Echo of the contact data the recommendation considered (for the card). */
+  contactData: ComposerContactData
+  tokensIn: number
+  tokensOut: number
+  costUsd: number
+  latencyMs: number
+}

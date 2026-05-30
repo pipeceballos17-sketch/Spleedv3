@@ -10,12 +10,16 @@ import {
 } from 'drizzle-orm/pg-core'
 import { sql } from 'drizzle-orm'
 import { orgs } from './tenant'
-import { leads } from './leads'
+import { leads, icps } from './leads'
 import {
   assetKindEnum,
   outreachChannelEnum,
   outreachDirectionEnum,
+  outreachDraftStatusEnum,
+  outreachReplyIntentEnum,
+  outreachReplyProviderEnum,
   outreachStatusEnum,
+  outreachUnsubscribeSourceEnum,
   trackingEventKindEnum,
 } from './enums'
 
@@ -226,5 +230,116 @@ export const trackingEvents = pgTable(
     ),
     // Lead-level engagement summary.
     leadKindIdx: index('tracking_events_lead_kind_idx').on(t.leadId, t.kind),
+  }),
+)
+
+// =====================================================================
+// Sprint 8 — Composer + Outreach pipeline (drafts, unsubscribes, replies)
+// =====================================================================
+
+/**
+ * Composer output — one draft per lead per compose run (Decision 4: single
+ * draft + regenerate, not multi-variant). The Composer worker (Sprint 8.2)
+ * inserts status='pending_approval'; the Slack approval handler / dashboard
+ * transitions it (approved → sent, or rejected/regenerated).
+ *
+ * channel-shaped: `subject` is NULL for iMessage drafts (body-only). RLS is
+ * member SELECT-only; service role (Composer worker + approval handler) does
+ * INSERT/UPDATE — mirrors outreach_events. Dashboard member-write can be added
+ * Sprint 9-10 if founders edit drafts in-app.
+ *
+ * composer_metadata captures hooks_used / voice_applied / per-step cost
+ * breakdown for Hermes (Sprint 9+) + dashboard cost rollups.
+ */
+export const outreachDrafts = pgTable(
+  'outreach_drafts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orgId: uuid('org_id').notNull().references(() => orgs.id, { onDelete: 'cascade' }),
+    leadId: uuid('lead_id').notNull().references(() => leads.id, { onDelete: 'cascade' }),
+    icpId: uuid('icp_id').notNull().references(() => icps.id, { onDelete: 'cascade' }),
+
+    channel: outreachChannelEnum('channel').notNull(),
+    // NULL for iMessage (body-only). Email drafts carry a subject.
+    subject: text('subject'),
+    body: text('body').notNull(),
+
+    status: outreachDraftStatusEnum('status').notNull().default('pending_approval'),
+
+    // hooks_used, voice_applied, cost_breakdown (per-step). Permissive Record
+    // for Sprint 8; a discriminated Zod shape can land when Hermes consumes it.
+    composerMetadata: jsonb('composer_metadata').$type<Record<string, unknown>>(),
+
+    // Slack message ts of the approval card — links the draft to its DM thread
+    // so the interaction handler (Sprint 8.2) can correlate button clicks.
+    approvalSlackTs: text('approval_slack_ts'),
+    approvedAt: timestamp('approved_at', { withTimezone: true }),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+
+    // Worker-version stamp (mirrors lead_dossiers.enriched_by): 'composer_agent_v1'.
+    enrichedBy: text('enriched_by').notNull(),
+
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    orgIdx: index('outreach_drafts_org_idx').on(t.orgId),
+    leadIdx: index('outreach_drafts_lead_idx').on(t.leadId),
+    statusIdx: index('outreach_drafts_status_idx').on(t.status),
+  }),
+)
+
+/**
+ * Compliance suppression list (Decision 6). Composer/Operator check this
+ * before drafting/sending; the unsubscribe link/STOP handler (Sprint 8.2)
+ * inserts. Unique per (org, channel, identifier) so re-subscribe is an
+ * explicit delete + re-add, and double-unsubscribe is a no-op upsert target.
+ *
+ * `identifier` is the channel-native address (email or phone). RLS member
+ * SELECT-only; service role writes.
+ */
+export const outreachUnsubscribes = pgTable(
+  'outreach_unsubscribes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orgId: uuid('org_id').notNull().references(() => orgs.id, { onDelete: 'cascade' }),
+    channel: outreachChannelEnum('channel').notNull(),
+    identifier: text('identifier').notNull(),
+    source: outreachUnsubscribeSourceEnum('source').notNull(),
+    unsubscribedAt: timestamp('unsubscribed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    // Unique + the enforcement lookup key in one index (org+channel+identifier).
+    orgChannelIdentifierUnique: uniqueIndex('outreach_unsubscribes_org_channel_identifier_unique')
+      .on(t.orgId, t.channel, t.identifier),
+  }),
+)
+
+/**
+ * Inbound reply (Decision 8). The reply webhook (Sprint 8.2) inserts; live
+ * Sendblue/IMAP wiring lands Sprint 9+. draft_id links the reply back to the
+ * draft that prompted it (SET NULL if the draft is later purged). parsed_intent
+ * is an LLM classification (nullable until classified). RLS member SELECT-only;
+ * service role (webhook handler) inserts.
+ */
+export const outreachReplies = pgTable(
+  'outreach_replies',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    orgId: uuid('org_id').notNull().references(() => orgs.id, { onDelete: 'cascade' }),
+    leadId: uuid('lead_id').notNull().references(() => leads.id, { onDelete: 'cascade' }),
+    draftId: uuid('draft_id').references(() => outreachDrafts.id, { onDelete: 'set null' }),
+
+    sourceProvider: outreachReplyProviderEnum('source_provider').notNull(),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull(),
+    body: text('body').notNull(),
+    parsedIntent: outreachReplyIntentEnum('parsed_intent'),
+    rawPayload: jsonb('raw_payload').$type<Record<string, unknown>>(),
+
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    orgIdx: index('outreach_replies_org_idx').on(t.orgId),
+    leadIdx: index('outreach_replies_lead_idx').on(t.leadId),
   }),
 )

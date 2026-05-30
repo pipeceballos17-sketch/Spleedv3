@@ -13,7 +13,7 @@ import {
 import { sql } from 'drizzle-orm'
 import { orgs } from './tenant'
 import { scoutRuns } from './scout'
-import { leadStatusEnum, leadThreadRoleEnum } from './enums'
+import { leadStatusEnum, leadThreadRoleEnum, outreachChannelEnum } from './enums'
 
 /**
  * Ideal Customer Profile. Founder writes definition in natural language; an LLM
@@ -70,6 +70,19 @@ export const icps = pgTable(
     // registries, etc.) WITHOUT Spleed hardcoding industry mappings — preserves
     // the horizontal B2B positioning. NULL = universal core-4 research only.
     deepResearchGuidance: text('deep_research_guidance'),
+
+    // Sprint 8 — Composer per-ICP outreach config.
+    // preferredChannel drives channel-specific drafting (email subject+body vs
+    // iMessage body-only). Reuses outreachChannelEnum (email|linkedin|x|imessage);
+    // Composer Sprint 8 supports email|imessage, app-layer validates the subset.
+    preferredChannel: outreachChannelEnum('preferred_channel').notNull().default('email'),
+    // L4 personalization (Decision 3): tenant voice steer injected into the
+    // Composer draft-composition prompt. NULL = neutral professional default.
+    // Hermes (generateIcpStarterGuidance) can seed this from the ICP description.
+    outreachVoiceGuidance: text('outreach_voice_guidance'),
+    // Compliance (Decision 6): tenant footer (unsubscribe + identification)
+    // appended to every draft and verified by the quality-check step.
+    outreachFooterTemplate: text('outreach_footer_template'),
 
     naturalLanguageUpdatedAt: timestamp('natural_language_updated_at', { withTimezone: true })
       .notNull()

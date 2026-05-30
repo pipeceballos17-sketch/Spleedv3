@@ -71,6 +71,13 @@
       "when": 1780004068591,
       "tag": "0009_mighty_zarek",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1780022594440,
+      "tag": "0010_whole_silver_sable",
+      "breakpoints": true
     }
   ]
 }

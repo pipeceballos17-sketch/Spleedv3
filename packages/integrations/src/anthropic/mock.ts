@@ -1,11 +1,19 @@
 import type {
+  ChannelRecommendation,
+  ComposedDraft,
+  ComposerChannel,
+  ComposerContactData,
   ConciergePayload,
   DeepResearchOutput,
   ExtractedCompanyWebsiteSignals,
   ExtractedLinkedinSignals,
   ExtractedNewsSignals,
+  IcpStarterGuidance,
+  OutreachAngle,
   ProfilerSourceName,
+  QualityVerdict,
   ScoreLeadInput,
+  SelectedHook,
   SynthesizedDossierJson,
 } from './types'
 
@@ -1545,5 +1553,387 @@ export function mockParseConciergeQuery(text: string): {
     payload: { linkedinUrl: null, companyDomain: null, name: null, title: null, notes: null },
     parseSucceeded: false,
     errorReason: 'Too ambiguous — no identifiable lead in query',
+  }
+}
+
+// ─── Composer (Sprint 8) — 4-step draft pipeline mock ──────────────────
+
+/**
+ * Per-step Sonnet 4.6 token estimates. Cost is computed in client.ts via
+ * computeCostUsd(this.model, …) — at the sonnet-4-6 rate (3/15 per M) these
+ * land ~$0.07 total per draft (the plan's ~$0.04 estimate assumed a cheaper
+ * model tier). Constants exist for cost_events parity in Sprint 8.2 tests.
+ */
+export const MOCK_COMPOSER_HOOK_TOKENS_IN = 1500
+export const MOCK_COMPOSER_HOOK_TOKENS_OUT = 500
+export const MOCK_COMPOSER_ANGLE_TOKENS_IN = 2000
+export const MOCK_COMPOSER_ANGLE_TOKENS_OUT = 1000
+export const MOCK_COMPOSER_DRAFT_TOKENS_IN = 2500
+export const MOCK_COMPOSER_DRAFT_TOKENS_OUT = 1500
+export const MOCK_COMPOSER_QUALITY_TOKENS_IN = 1000
+export const MOCK_COMPOSER_QUALITY_TOKENS_OUT = 300
+export const MOCK_ICP_STARTER_TOKENS_IN = 800
+export const MOCK_ICP_STARTER_TOKENS_OUT = 400
+
+/**
+ * Deterministic per-step latency band (~1.2-3.0s/step → ~6-12s for the 4
+ * sequential calls). stepIndex spreads steps so the same lead produces a
+ * stable, monotonically-varied profile.
+ */
+export function mockComposerLatencyMs(hint: string, stepIndex: number): number {
+  const charSum = [...hint].reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
+  return 1200 + (charSum % 1500) + stepIndex * 150
+}
+
+interface ComposerFixture {
+  channel: ComposerChannel
+  selectedHooks: SelectedHook[]
+  angle: OutreachAngle
+  draft: ComposedDraft
+  quality: QualityVerdict
+}
+
+/** Compliance markers a passing quality check reports. */
+const PASS_MARKERS = ['unsubscribe', 'sender_identification', 'subject_clean', 'length_ok']
+
+/**
+ * Curated Composer drafts keyed by company domain — mirrors the
+ * MOCK_DEEP_RESEARCH_DOSSIERS pattern. Each fixture is coherent across all 4
+ * steps (the selected hook flows into the angle, which flows into the draft,
+ * which the quality check validates). Unknown domains fall back to
+ * GENERIC_COMPOSER_FIXTURE so any lead drafts gracefully.
+ *
+ * Industry-agnostic by design (Spleed horizontal positioning): the voice
+ * differences come from the fixture content, not hardcoded industry logic in
+ * the Composer itself.
+ */
+export const MOCK_COMPOSER_DRAFTS: Record<string, ComposerFixture> = {
+  // Sarah Chen — SaaS Series A, email, rich deep-research signals.
+  'pulseanalytics.io': {
+    channel: 'email',
+    selectedHooks: [
+      {
+        hook: 'Pulse just closed $14M Series A with Costanoa — outbound motion in active build',
+        reasoning:
+          'Freshest, highest-confidence signal (0.93); a funding round is a concrete, time-bound reason to reach out now.',
+        confidence: 0.93,
+      },
+      {
+        hook: 'Brian Chen joined as CSO 2 months ago — deliberate GTM scaling',
+        reasoning:
+          'Deep-research succession signal reinforces the Series A narrative and shows a senior sales hire to anchor the angle.',
+        confidence: 0.88,
+      },
+    ],
+    angle: {
+      opener:
+        "Saw Pulse closed the $14M with Costanoa — and that Brian came on as CSO right after. Reads like a deliberate playbook, not a hire-and-hope.",
+      valueProposition:
+        'Spleed runs founder-led outbound that learns your voice in weeks — so the motion you and Brian are building scales without another SDR headcount yet.',
+      cta: 'Worth 15 min next week to compare notes on the activation metrics you keynoted at SaaStr?',
+    },
+    draft: {
+      subject: 'Your Series A + Brian as CSO — the scaling playbook',
+      body: [
+        'Hi Sarah,',
+        '',
+        "Saw Pulse closed the $14M with Costanoa — and that Brian came on as CSO right after. Reads like a deliberate playbook, not a hire-and-hope.",
+        '',
+        'Spleed runs founder-led outbound that learns your voice in weeks, so the motion you and Brian are building scales without adding SDR headcount yet.',
+        '',
+        'Worth 15 minutes next week to compare notes on the activation metrics you keynoted at SaaStr?',
+        '',
+        'Best,',
+        'Felipe — Spleed',
+        '',
+        'Spleed Inc · Reply STOP or click unsubscribe to opt out.',
+      ].join('\n'),
+    },
+    quality: { passed: true, issues: [], markersFound: PASS_MARKERS },
+  },
+
+  // Henry Wallace — sparse dossier (no hooks), graceful generic draft, email.
+  'wallacesteel.com': {
+    channel: 'email',
+    selectedHooks: [
+      {
+        hook: 'Plant Manager at a regional steel fabricator — operational efficiency focus',
+        reasoning:
+          'Dossier was thin (no deep-research findings); fall back to a role-based, low-confidence angle rather than fabricate specifics.',
+        confidence: 0.35,
+      },
+    ],
+    angle: {
+      opener: 'Hi Henry — quick note from one operator to another.',
+      valueProposition:
+        'Spleed helps lean teams reach the right buyers without a full sales org — useful when every hour on the floor counts.',
+      cta: 'Open to a brief call to see if it fits how Wallace Steel sells?',
+    },
+    draft: {
+      subject: 'A lighter way to reach new buyers',
+      body: [
+        'Hi Henry,',
+        '',
+        'Quick note from one operator to another — Spleed helps lean teams reach the right buyers without standing up a full sales org.',
+        '',
+        'Open to a brief call to see if it fits how Wallace Steel sells?',
+        '',
+        'Best,',
+        'Felipe — Spleed',
+        '',
+        'Spleed Inc · Reply STOP or click unsubscribe to opt out.',
+      ].join('\n'),
+    },
+    quality: { passed: true, issues: [], markersFound: PASS_MARKERS },
+  },
+
+  // Mariana-ICP factoring lender — iMessage, short body, no subject, warm voice.
+  'examplelender.com': {
+    channel: 'imessage',
+    selectedHooks: [
+      {
+        hook: 'Hiring 5 GTM roles post-raise — scaling origination team',
+        reasoning:
+          'Hiring velocity is the clearest growth signal for a factoring lender; short-form iMessage favors one punchy hook.',
+        confidence: 0.82,
+      },
+    ],
+    angle: {
+      opener: 'Hi Mariana — saw you\'re building out the origination team.',
+      valueProposition: 'Spleed books qualified intros so your new reps ramp on warm pipeline.',
+      cta: 'Worth a quick call?',
+    },
+    draft: {
+      subject: null,
+      body: [
+        "Hi Mariana — saw you're scaling the origination team post-raise. Spleed books qualified intros so your new reps ramp on warm pipeline instead of cold lists. Worth a quick call this week? (Reply STOP to opt out.) — Felipe, Spleed",
+      ].join('\n'),
+    },
+    quality: { passed: true, issues: [], markersFound: PASS_MARKERS },
+  },
+
+  // Sebastián-ICP private school — email, formal Spanish voice.
+  'colegiosanandres.edu.co': {
+    channel: 'email',
+    selectedHooks: [
+      {
+        hook: 'Articulación con EAFIT anunciada — expansión de programa bilingüe',
+        reasoning:
+          'La alianza con EAFIT es el hito más reciente y verificable; ancla un acercamiento formal y específico.',
+        confidence: 0.8,
+      },
+    ],
+    angle: {
+      opener: 'Estimado Sebastián, felicitaciones por la articulación con EAFIT.',
+      valueProposition:
+        'Spleed ayuda a instituciones a llegar a familias y aliados adecuados sin un equipo comercial grande.',
+      cta: '¿Tendría 15 minutos la próxima semana para conversarlo?',
+    },
+    draft: {
+      subject: 'Su articulación con EAFIT — una idea para el programa bilingüe',
+      body: [
+        'Estimado Sebastián,',
+        '',
+        'Felicitaciones por la articulación con EAFIT — un paso importante para el programa bilingüe del colegio.',
+        '',
+        'Spleed ayuda a instituciones como la suya a llegar a las familias y aliados adecuados sin necesidad de un equipo comercial grande.',
+        '',
+        '¿Tendría 15 minutos la próxima semana para conversarlo?',
+        '',
+        'Un cordial saludo,',
+        'Felipe — Spleed',
+        '',
+        'Spleed Inc · Responda STOP o use el enlace para darse de baja.',
+      ].join('\n'),
+    },
+    quality: { passed: true, issues: [], markersFound: PASS_MARKERS },
+  },
+
+  // Brazilian fintech — email, Portuguese voice.
+  'exemplofintech.com.br': {
+    channel: 'email',
+    selectedHooks: [
+      {
+        hook: 'Captação Série A recente — montando o time de vendas',
+        reasoning: 'A rodada recente é o gatilho mais forte e atual para o contato.',
+        confidence: 0.85,
+      },
+    ],
+    angle: {
+      opener: 'Olá — parabéns pela captação recente.',
+      valueProposition:
+        'A Spleed cuida do outbound founder-led e aprende a sua voz em semanas, escalando vendas sem contratar SDR ainda.',
+      cta: 'Vale 15 minutos na próxima semana para conversarmos?',
+    },
+    draft: {
+      subject: 'Sua captação Série A — uma ideia para o time de vendas',
+      body: [
+        'Olá,',
+        '',
+        'Parabéns pela captação recente. A Spleed cuida do outbound founder-led e aprende a sua voz em semanas, escalando vendas sem precisar contratar um SDR ainda.',
+        '',
+        'Vale 15 minutos na próxima semana para conversarmos?',
+        '',
+        'Abraço,',
+        'Felipe — Spleed',
+        '',
+        'Spleed Inc · Responda STOP ou use o link para cancelar.',
+      ].join('\n'),
+    },
+    quality: { passed: true, issues: [], markersFound: PASS_MARKERS },
+  },
+}
+
+/** Fallback for any unknown domain — neutral professional email draft. */
+const GENERIC_COMPOSER_FIXTURE: ComposerFixture = {
+  channel: 'email',
+  selectedHooks: [
+    {
+      hook: 'Recent company growth signal',
+      reasoning: 'No curated dossier for this domain — generic growth-based angle.',
+      confidence: 0.4,
+    },
+  ],
+  angle: {
+    opener: 'Hi there — quick note.',
+    valueProposition: 'Spleed runs founder-led outbound that learns your voice and books qualified meetings.',
+    cta: 'Open to a 15-minute call next week?',
+  },
+  draft: {
+    subject: 'A quick idea for your outbound',
+    body: [
+      'Hi there,',
+      '',
+      'Spleed runs founder-led outbound that learns your voice and books qualified meetings — no SDR headcount required.',
+      '',
+      'Open to a 15-minute call next week?',
+      '',
+      'Best,',
+      'Felipe — Spleed',
+      '',
+      'Spleed Inc · Reply STOP or click unsubscribe to opt out.',
+    ].join('\n'),
+  },
+  quality: { passed: true, issues: [], markersFound: PASS_MARKERS },
+}
+
+function composerFixture(domainHint?: string): ComposerFixture {
+  return (domainHint && MOCK_COMPOSER_DRAFTS[domainHint]) || GENERIC_COMPOSER_FIXTURE
+}
+
+export function mockSelectHook(domainHint?: string): SelectedHook[] {
+  return composerFixture(domainHint).selectedHooks
+}
+
+export function mockGenerateAngle(domainHint?: string): OutreachAngle {
+  return composerFixture(domainHint).angle
+}
+
+/**
+ * Channel-aware: an iMessage request always returns a subject-less draft even
+ * if the fixture is email-shaped, so the caller's channel choice is honored.
+ */
+export function mockComposeDraft(domainHint: string | undefined, channel: ComposerChannel): ComposedDraft {
+  const draft = composerFixture(domainHint).draft
+  if (channel === 'imessage') {
+    return { subject: null, body: draft.body }
+  }
+  return { subject: draft.subject ?? 'A quick idea for your outbound', body: draft.body }
+}
+
+export function mockCheckQuality(domainHint?: string): QualityVerdict {
+  return composerFixture(domainHint).quality
+}
+
+/**
+ * Hermes ICP starter guidance — keyword-detected voice + footer. Industry-
+ * agnostic: matches on tokens in the ICP description rather than a hardcoded
+ * vertical taxonomy, preserving Spleed's horizontal positioning.
+ */
+export function mockGenerateIcpStarterGuidance(descriptionHint?: string): IcpStarterGuidance {
+  const lower = (descriptionHint ?? '').toLowerCase()
+  // Substring/stem matching (no \b anchors) so plurals + inflections hit:
+  // "schools"→school, "colegios"→colegio, "education"/"educación"→educa.
+  if (/factoring|lending|lender|cr[eé]dito/.test(lower)) {
+    return {
+      voiceGuidance:
+        'Warm, peer-to-peer, concise. Lead with a concrete growth signal (hiring, raise). Avoid jargon; respect that decision makers are time-poor operators.',
+      footerTemplate: '{{company}} · Reply STOP to opt out · {{sender_name}}, {{sender_company}}',
+    }
+  }
+  if (/escuela|colegio|liceo|universidad|educa|school/.test(lower)) {
+    return {
+      voiceGuidance:
+        'Formal and respectful (usted in Spanish). Reference institutional milestones (accreditations, alliances). Emphasize trust and community over speed.',
+      footerTemplate: '{{company}} · Para darse de baja responda STOP · {{sender_name}}, {{sender_company}}',
+    }
+  }
+  if (/saas|startup|founder|software/.test(lower)) {
+    return {
+      voiceGuidance:
+        'Direct, founder-to-founder, lightly informal. Reference a specific recent signal (funding, key hire, launch). Short paragraphs; one clear CTA.',
+      footerTemplate: '{{company}} · Unsubscribe · {{sender_name}}, {{sender_company}}',
+    }
+  }
+  // Universal fallback.
+  return {
+    voiceGuidance:
+      'Professional and concise. Open with a specific, verifiable reason for reaching out. One value proposition, one clear CTA. No buzzword stacking.',
+    footerTemplate: '{{company}} · Reply STOP or unsubscribe to opt out · {{sender_name}}, {{sender_company}}',
+  }
+}
+
+// ─── Composer Phase 0 — channel recommendation mock (Sprint 8.2) ───────
+
+export const MOCK_CHANNEL_REC_TOKENS_IN = 800
+export const MOCK_CHANNEL_REC_TOKENS_OUT = 200
+
+/**
+ * Channel recommendation mock — data-driven (presence of email/phone) +
+ * ICP baseline. Keyword/data logic now; Sprint 9+ Hermes adds reply-rate
+ * learning (BACKLOG-055). The ICP default is a starting point, not a mandate:
+ * an iMessage-preferring ICP falls back to email when no phone is on file.
+ */
+export function mockRecommendChannel(args: {
+  preferredChannel: ComposerChannel
+  contactData: ComposerContactData
+}): ChannelRecommendation {
+  const { preferredChannel, contactData } = args
+  const email = contactData.email ?? null
+  const phone = contactData.phone ?? null
+
+  if (!email && !phone) {
+    return {
+      channel: 'manual_lookup_required',
+      reasoning: 'No email or phone on file — manual contact lookup required before outreach.',
+      confidence: 0.9,
+    }
+  }
+  if (preferredChannel === 'imessage' && phone) {
+    return {
+      channel: 'imessage',
+      reasoning: 'ICP prefers iMessage and a phone number is on file.',
+      confidence: 0.85,
+    }
+  }
+  if (preferredChannel === 'imessage' && !phone && email) {
+    return {
+      channel: 'email',
+      reasoning: 'ICP prefers iMessage but no phone is available — falling back to email.',
+      confidence: 0.7,
+    }
+  }
+  if (email) {
+    return {
+      channel: 'email',
+      reasoning: 'ICP default is email and an address is on file.',
+      confidence: 0.9,
+    }
+  }
+  // phone only, ICP default email
+  return {
+    channel: 'imessage',
+    reasoning: 'Only a phone number is available — routing via iMessage.',
+    confidence: 0.75,
   }
 }

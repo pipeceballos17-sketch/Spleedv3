@@ -261,6 +261,54 @@ CREATE POLICY cost_events_member_select ON public.cost_events
 -- Workers insert as service role; users never mutate cost history.
 
 -- =====================================================================
+-- Sprint 8 — Composer + Outreach pipeline (drafts, unsubscribes, replies)
+-- Member SELECT only; service role (Composer worker + Slack approval handler
+-- + reply webhook) performs INSERT/UPDATE. Mirrors outreach_events.
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- outreach_drafts — Composer output. Member observes; service role writes
+-- (insert draft, transition status on approval/send). Sprint 9-10 may add a
+-- member UPDATE policy when the dashboard lets founders edit drafts in-app.
+-- ---------------------------------------------------------------------
+ALTER TABLE public.outreach_drafts ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS outreach_drafts_member_select ON public.outreach_drafts;
+CREATE POLICY outreach_drafts_member_select ON public.outreach_drafts
+  FOR SELECT
+  USING (org_id = public.current_org_id() AND public.is_org_member(org_id));
+
+-- No INSERT/UPDATE/DELETE policies — Composer worker + approval handler run
+-- as service role (bypasses RLS).
+
+-- ---------------------------------------------------------------------
+-- outreach_unsubscribes — compliance suppression list. Member SELECT to view
+-- in dashboard; service role (unsubscribe link / STOP handler) inserts.
+-- ---------------------------------------------------------------------
+ALTER TABLE public.outreach_unsubscribes ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS outreach_unsubscribes_member_select ON public.outreach_unsubscribes;
+CREATE POLICY outreach_unsubscribes_member_select ON public.outreach_unsubscribes
+  FOR SELECT
+  USING (org_id = public.current_org_id() AND public.is_org_member(org_id));
+
+-- No INSERT/UPDATE/DELETE policies — suppression entries are written by
+-- service-role webhook/link handlers; never mutated by members directly.
+
+-- ---------------------------------------------------------------------
+-- outreach_replies — inbound replies. Member SELECT only; service role
+-- (reply webhook / IMAP poller) inserts.
+-- ---------------------------------------------------------------------
+ALTER TABLE public.outreach_replies ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS outreach_replies_member_select ON public.outreach_replies;
+CREATE POLICY outreach_replies_member_select ON public.outreach_replies
+  FOR SELECT
+  USING (org_id = public.current_org_id() AND public.is_org_member(org_id));
+
+-- No INSERT/UPDATE/DELETE policies — replies arrive via service-role handlers.
+
+-- =====================================================================
 -- Enum documentation (informational, not enforced at DB level)
 -- =====================================================================
 

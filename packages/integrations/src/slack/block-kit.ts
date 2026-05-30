@@ -14,7 +14,9 @@
  */
 
 import type {
+  BuildApprovalCardInput,
   BuildDossierCardInput,
+  BuildReplyNotificationCardInput,
   DossierCardDeepResearch,
   SlackBlock,
 } from './types'
@@ -31,6 +33,33 @@ function deepResearchHasFindings(dr: DossierCardDeepResearch): boolean {
     dr.tech_stack_signals.findings.length > 0 ||
     dr.recent_activity_signals.findings.length > 0
   )
+}
+
+/**
+ * Render a 📞 Contact section (Sprint 8.2). Shows whichever of email / phone /
+ * LinkedIn are present; when all are absent, a single warning line prompts the
+ * founder to add contact data. LinkedIn URL is a display key, not a channel.
+ */
+function contactSection(contact: {
+  email?: string | null
+  phone?: string | null
+  linkedinUrl?: string | null
+}): SlackBlock[] {
+  const { email, phone, linkedinUrl } = contact
+  if (!email && !phone && !linkedinUrl) {
+    return [
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: '📞 *Contact*\n_No contact data extracted yet — manual update may be needed._' },
+      },
+    ]
+  }
+  const lines = [
+    `• Email: ${email ?? '_not extracted_'}`,
+    `• Phone: ${phone ?? '_not extracted_'}`,
+    `• LinkedIn: ${linkedinUrl ?? '_not provided_'}`,
+  ]
+  return [{ type: 'section', text: { type: 'mrkdwn', text: `📞 *Contact*\n${lines.join('\n')}` } }]
 }
 
 function categoryBlock(
@@ -87,6 +116,9 @@ export function buildDossierCard(input: BuildDossierCardInput): SlackBlock[] {
     })
   }
 
+  // ─── Contact (Sprint 8.2)
+  blocks.push(...contactSection({ email: lead.email, phone: lead.phone, linkedinUrl: lead.linkedinUrl }))
+
   blocks.push({ type: 'divider' })
 
   // ─── Recommended angle
@@ -138,6 +170,154 @@ export function buildDossierCard(input: BuildDossierCardInput): SlackBlock[] {
       },
     ],
   })
+
+  return blocks
+}
+
+/**
+ * Build the Composer draft approval card (Sprint 8). Posted as a threaded
+ * reply when a draft reaches 'pending_approval'. Block ordering:
+ *   1. Header — "📝 Draft ready for {lead}"
+ *   2. (email) Section — subject line
+ *   3. Section — the draft body (mrkdwn)
+ *   4. Context — voice summary · cost · channel
+ *   5. Actions — Approve & Send / Edit / Regenerate / Reject
+ *
+ * The four buttons carry the draftId as `value`; POST /api/slack/interactions
+ * routes by action_id. Approve is `primary` (green), Reject is `danger` (red).
+ */
+export function buildApprovalCard(input: BuildApprovalCardInput): SlackBlock[] {
+  const { draftId, leadName, channel, subject, body, voiceSummary, costUsd } = input
+  const blocks: SlackBlock[] = []
+
+  blocks.push({
+    type: 'header',
+    text: { type: 'plain_text', text: `📝 Draft ready for ${leadName}`, emoji: true },
+  })
+
+  // ─── Phase 0 channel recommendation (Sprint 8.2)
+  if (input.channelReasoning) {
+    const conf = typeof input.channelConfidence === 'number' ? ` (confidence ${input.channelConfidence.toFixed(2)})` : ''
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: `🎯 *Recommended channel: ${channel.toUpperCase()}*\n_${input.channelReasoning}_${conf}` },
+    })
+  }
+
+  // ─── Contact data
+  if (input.contact) {
+    blocks.push(...contactSection(input.contact))
+  }
+
+  if (channel === 'email' && subject) {
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: `*Subject:* ${subject}` },
+    })
+  }
+
+  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: body } })
+
+  const footerParts = [
+    voiceSummary ? `Voice: ${voiceSummary}` : null,
+    `Cost: $${costUsd.toFixed(4)}`,
+    `Channel: ${channel}`,
+  ].filter((p): p is string => p !== null)
+  blocks.push({
+    type: 'context',
+    elements: [{ type: 'mrkdwn', text: footerParts.join(' · ') }],
+  })
+
+  blocks.push({
+    type: 'actions',
+    block_id: `draft_actions_${draftId}`,
+    elements: [
+      {
+        type: 'button',
+        text: { type: 'plain_text', text: '✅ Approve & Send', emoji: true },
+        action_id: 'approve_draft',
+        value: draftId,
+        style: 'primary',
+      },
+      {
+        type: 'button',
+        text: { type: 'plain_text', text: '✏️ Edit', emoji: true },
+        action_id: 'edit_draft',
+        value: draftId,
+      },
+      {
+        type: 'button',
+        text: { type: 'plain_text', text: '🔄 Regenerate', emoji: true },
+        action_id: 'regenerate_draft',
+        value: draftId,
+      },
+      {
+        type: 'button',
+        text: { type: 'plain_text', text: '❌ Reject', emoji: true },
+        action_id: 'reject_draft',
+        value: draftId,
+        style: 'danger',
+      },
+    ],
+  })
+
+  return blocks
+}
+
+/**
+ * Build the inbound-reply notification card (Sprint 8.2). Posted as a threaded
+ * reply when a lead responds. 'engaged' replies surface 3 action buttons
+ * (Mark engaged / Draft reply / Archive); 'declined' and 'other' are FYI-only
+ * (no buttons). Unsubscribe replies are handled separately (plain message) and
+ * don't use this card.
+ */
+export function buildReplyNotificationCard(input: BuildReplyNotificationCardInput): SlackBlock[] {
+  const { replyId, leadName, replyBody, intent } = input
+  const blocks: SlackBlock[] = []
+
+  const headerText =
+    intent === 'engaged' ? `🎉 ${leadName} replied!` : `📬 ${leadName} replied`
+  blocks.push({ type: 'header', text: { type: 'plain_text', text: headerText, emoji: true } })
+
+  // Quote the reply body (cap length to keep the card scannable).
+  const quoted = replyBody.length > 600 ? `${replyBody.slice(0, 600)}…` : replyBody
+  blocks.push({
+    type: 'section',
+    text: { type: 'mrkdwn', text: `> ${quoted.replace(/\n/g, '\n> ')}` },
+  })
+
+  if (intent === 'engaged') {
+    blocks.push({
+      type: 'actions',
+      block_id: `reply_actions_${replyId}`,
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: '✅ Mark as engaged', emoji: true },
+          action_id: 'mark_engaged',
+          value: replyId,
+          style: 'primary',
+        },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: '📝 Draft reply', emoji: true },
+          action_id: 'draft_reply',
+          value: replyId,
+        },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: '🗂 Archive', emoji: true },
+          action_id: 'archive_reply',
+          value: replyId,
+        },
+      ],
+    })
+  } else {
+    blocks.push({
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: `Intent: ${intent} · no action needed` }],
+    })
+  }
 
   return blocks
 }

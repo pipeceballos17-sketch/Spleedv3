@@ -111,15 +111,29 @@ export type SlackEvent = SlackMessageImEvent | { type: string; [k: string]: unkn
 // ─── Block Kit (Sprint 7c — dossier card rendering) ────────────────
 
 /**
- * Minimal Block Kit type union — covers what the dossier card uses
- * (header, section + mrkdwn, divider, context). Full Slack block schema
- * is much larger; this stays compact intentionally.
+ * A Block Kit interactive button (Sprint 8 — approval card). action_id routes
+ * the interaction in POST /api/slack/interactions; value carries the draftId.
+ */
+export interface SlackButton {
+  type: 'button'
+  text: { type: 'plain_text'; text: string; emoji?: boolean }
+  action_id: string
+  value?: string
+  /** 'primary' (green) / 'danger' (red); omit for default. */
+  style?: 'primary' | 'danger'
+}
+
+/**
+ * Minimal Block Kit type union — header/section/divider/context (Sprint 7c
+ * dossier card) plus actions (Sprint 8 approval buttons). Full Slack block
+ * schema is much larger; this stays compact intentionally.
  */
 export type SlackBlock =
   | { type: 'header'; text: { type: 'plain_text'; text: string; emoji?: boolean } }
   | { type: 'section'; text: { type: 'mrkdwn' | 'plain_text'; text: string }; fields?: Array<{ type: 'mrkdwn'; text: string }> }
   | { type: 'divider' }
   | { type: 'context'; elements: Array<{ type: 'mrkdwn'; text: string }> }
+  | { type: 'actions'; block_id?: string; elements: SlackButton[] }
 
 // ─── buildDossierCard inputs (Sprint 7c) ────────────────────────────
 //
@@ -134,6 +148,11 @@ export interface DossierCardLeadShape {
   role?: string | null
   company?: string | null
   companyDomain?: string | null
+  // Sprint 8.2 — contact data surfaced on the card. LinkedIn URL is a display
+  // key (not an outreach channel in Sprint 8). phone is unsourced until Sprint 9+.
+  email?: string | null
+  phone?: string | null
+  linkedinUrl?: string | null
 }
 
 export interface DossierCardHook {
@@ -172,4 +191,49 @@ export interface BuildDossierCardInput {
    * Research section gracefully — confidence footer reflects 3 sources.
    */
   deepResearch?: DossierCardDeepResearch | null
+}
+
+// ─── buildApprovalCard inputs (Sprint 8 — Composer draft approval) ──────
+//
+// Leaf-typed (no @spleed/agents/@spleed/db imports). The Composer worker maps
+// its outreach_draft row onto this shape at the call site. The four action_ids
+// (approve_draft/edit_draft/regenerate_draft/reject_draft) are routed by
+// POST /api/slack/interactions; each button carries the draftId as `value`.
+
+export type ApprovalChannel = 'email' | 'imessage'
+
+export interface BuildApprovalCardInput {
+  /** outreach_drafts.id — carried as the button value for interaction routing. */
+  draftId: string
+  leadName: string
+  channel: ApprovalChannel
+  /** Email subject (null/omitted for iMessage). */
+  subject?: string | null
+  body: string
+  /** Short voice-guidance summary surfaced in the footer. */
+  voiceSummary?: string | null
+  /** Total compose cost (sum of the steps). */
+  costUsd: number
+  /** Phase 0 channel recommendation (Sprint 8.2) — shown above the draft. */
+  channelReasoning?: string | null
+  channelConfidence?: number | null
+  /** Lead contact data shown on the card. */
+  contact?: {
+    email?: string | null
+    phone?: string | null
+    linkedinUrl?: string | null
+  }
+}
+
+// ─── buildReplyNotificationCard inputs (Sprint 8 — inbound reply alert) ──
+
+/** Classified reply intent. 'engaged' surfaces action buttons; others are FYI. */
+export type ReplyIntent = 'engaged' | 'declined' | 'other'
+
+export interface BuildReplyNotificationCardInput {
+  /** outreach_replies.id — button value for interaction routing. */
+  replyId: string
+  leadName: string
+  replyBody: string
+  intent: ReplyIntent
 }

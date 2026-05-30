@@ -4,6 +4,8 @@ import { helloWorldWorker } from './hello-world.worker'
 import { scoutWorker } from './scout.worker'
 import { profilerWorker } from './profiler.worker'
 import { conciergeWorker } from './concierge.worker'
+import { composerWorker } from './composer.worker'
+import { outreachOperatorWorker } from './outreach-operator.worker'
 
 /**
  * Registry of all workers started by `startAllWorkers()`. Sprint 5+ appends
@@ -14,6 +16,8 @@ export const ALL_WORKERS = [
   scoutWorker,
   profilerWorker,
   conciergeWorker,
+  composerWorker,
+  outreachOperatorWorker,
 ] as const
 
 export interface RunningWorkers {
@@ -67,4 +71,24 @@ export {
   type ProcessConciergeJobOverrides,
 } from './concierge.worker'
 export { enqueueConciergeJob } from '../queues/concierge.queue'
+export {
+  composerWorker,
+  processComposerJob,
+  ComposerJobSchema,
+  type ComposerJob,
+  type ComposerResult,
+  type ComposerContext,
+  type ProcessComposerJobOverrides,
+} from './composer.worker'
+export { enqueueComposerJob } from '../queues/composer.queue'
+export {
+  outreachOperatorWorker,
+  processOutreachDeliveryJob,
+  OutreachDeliveryJobSchema,
+  type OutreachDeliveryJob,
+  type OutreachDeliveryResult,
+  type OutreachDeliveryContext,
+  type ProcessOutreachDeliveryOverrides,
+} from './outreach-operator.worker'
+export { enqueueOutreachDelivery } from '../queues/outreach-operator.queue'
 export { waitForJob, type WaitForJobInput, type WaitForJobResult } from './wait-for-job'

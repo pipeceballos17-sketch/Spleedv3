@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm'
+import { and, desc, eq } from 'drizzle-orm'
 import { z } from 'zod'
 import {
   getServiceClient,
@@ -6,6 +6,9 @@ import {
   leadDossiers as leadDossiersTable,
   leads as leadsTable,
   orgs as orgsTable,
+  outreachDrafts as outreachDraftsTable,
+  outreachReplies as outreachRepliesTable,
+  outreachUnsubscribes as outreachUnsubscribesTable,
   scoutRuns,
 } from '@spleed/db'
 import { ingestLead } from '@spleed/agents'
@@ -17,16 +20,23 @@ import {
   pauseScoutCron,
   getScoutCron,
   enqueueConciergeJob,
+  enqueueComposerJob,
+  enqueueOutreachDelivery,
   waitForJob,
 } from '@spleed/agents/workers'
 import {
   SlackClient,
+  buildReplyNotificationCard,
+  getSlackOAuthTokens,
   storeSlackOAuthTokens,
   verifySlackSignature,
+  type ReplyIntent,
   type SlackEventEnvelope,
   type SlackMessageImEvent,
 } from '@spleed/integrations/slack'
+import { AnthropicClient, storeAnthropicApiKey } from '@spleed/integrations/anthropic'
 import { signOAuthState, verifyOAuthState } from './helpers/slack-oauth-state'
+import { verifyReplyWebhook } from './helpers/reply-webhook-signature'
 import { startWorkers } from './workers/start'
 
 const port = Number(process.env.API_PORT ?? 3001)
@@ -788,6 +798,415 @@ async function postSlackEvents(req: Request): Promise<Response> {
   return new Response('', { status: 200 })
 }
 
+/**
+ * POST /api/slack/interactions — Block Kit button clicks on the Composer
+ * approval card (Sprint 8.2).
+ *
+ * Slack sends `application/x-www-form-urlencoded` with a single `payload`
+ * field holding the JSON. Signature verification needs the UNPARSED body
+ * (same as /events), so we read req.text() once and parse it ourselves.
+ *
+ * Routes by action_id (each button carries the draftId as `value`):
+ *   approve_draft    → mark approved (CP2 wires the delivery enqueue)
+ *   edit_draft       → Sprint 9 dashboard edit (ack for now)
+ *   regenerate_draft → enqueueComposerJob(mode='regenerate')
+ *   reject_draft     → mark rejected
+ */
+async function postSlackInteractions(req: Request): Promise<Response> {
+  const rawBody = await req.text()
+
+  const signingSecret = process.env.SLACK_SIGNING_SECRET
+  if (!signingSecret) {
+    console.error('[POST /api/slack/interactions] SLACK_SIGNING_SECRET not set')
+    return Response.json({ error: 'INTERNAL' }, { status: 500 })
+  }
+  const valid = verifySlackSignature({
+    signingSecret,
+    timestamp: req.headers.get('x-slack-request-timestamp'),
+    signature: req.headers.get('x-slack-signature'),
+    rawBody,
+  })
+  if (!valid) return new Response('Unauthorized', { status: 401 })
+
+  // Form-encoded: payload=<url-encoded JSON>.
+  const payloadRaw = new URLSearchParams(rawBody).get('payload')
+  if (!payloadRaw) {
+    return Response.json({ error: 'MISSING_PAYLOAD' }, { status: 400 })
+  }
+  let payload: {
+    type?: string
+    channel?: { id?: string }
+    message?: { ts?: string; thread_ts?: string }
+    actions?: Array<{ action_id: string; value?: string }>
+  }
+  try {
+    payload = JSON.parse(payloadRaw)
+  } catch {
+    return Response.json({ error: 'INVALID_PAYLOAD' }, { status: 400 })
+  }
+
+  const action = payload.actions?.[0]
+  if (!action) return new Response('', { status: 200 })
+  const value = action.value
+  if (!value) {
+    return Response.json({ text: "I couldn't tell which item that was." }, { status: 200 })
+  }
+
+  const db = getServiceClient()
+
+  // ─── Reply-card actions (value = outreach_replies.id) ──────────────
+  const REPLY_ACTIONS = new Set(['mark_engaged', 'draft_reply', 'archive_reply'])
+  if (REPLY_ACTIONS.has(action.action_id)) {
+    const [reply] = await db
+      .select()
+      .from(outreachRepliesTable)
+      .where(eq(outreachRepliesTable.id, value))
+    if (!reply) {
+      return Response.json({ text: 'That reply no longer exists.' }, { status: 200 })
+    }
+    // parsed_intent enum has no 'engaged_confirmed' / 'archived' states, so
+    // founder confirmations are recorded in raw_payload jsonb (no migration).
+    const existingPayload = (reply.rawPayload as Record<string, unknown>) ?? {}
+    const nowIso = new Date().toISOString()
+    switch (action.action_id) {
+      case 'mark_engaged':
+        await db
+          .update(outreachRepliesTable)
+          .set({ rawPayload: { ...existingPayload, founderAction: 'engaged_confirmed', confirmedAt: nowIso } })
+          .where(eq(outreachRepliesTable.id, value))
+        return Response.json({ text: '✅ Marked as engaged.' }, { status: 200 })
+      case 'archive_reply':
+        await db
+          .update(outreachRepliesTable)
+          .set({ rawPayload: { ...existingPayload, archivedAt: nowIso } })
+          .where(eq(outreachRepliesTable.id, value))
+        return Response.json({ text: '🗂 Archived.' }, { status: 200 })
+      default: // draft_reply
+        return Response.json(
+          { text: 'Drafting a reply lands Sprint 9 — for now reply manually or from the dashboard.' },
+          { status: 200 },
+        )
+    }
+  }
+
+  // ─── Draft-card actions (value = outreach_drafts.id) ───────────────
+  const [draft] = await db
+    .select()
+    .from(outreachDraftsTable)
+    .where(eq(outreachDraftsTable.id, value))
+  if (!draft) {
+    return Response.json({ text: 'That draft no longer exists.' }, { status: 200 })
+  }
+  const draftId = value
+
+  switch (action.action_id) {
+    case 'approve_draft': {
+      await db
+        .update(outreachDraftsTable)
+        .set({ status: 'approved', approvedAt: new Date(), updatedAt: new Date() })
+        .where(eq(outreachDraftsTable.id, draftId))
+      // Hand off to the Outreach Operator. Composer only writes email|imessage;
+      // narrow the broader channel enum defensively.
+      await enqueueOutreachDelivery({
+        orgId: draft.orgId,
+        draftId,
+        channel: draft.channel === 'imessage' ? 'imessage' : 'email',
+      })
+      return Response.json({ text: '✅ Approved — sending shortly.' }, { status: 200 })
+    }
+    case 'edit_draft': {
+      return Response.json(
+        {
+          text: 'Editing in Slack lands Sprint 9 — for now edit in the dashboard, or tap 🔄 Regenerate.',
+        },
+        { status: 200 },
+      )
+    }
+    case 'regenerate_draft': {
+      await enqueueComposerJob({
+        orgId: draft.orgId,
+        leadId: draft.leadId,
+        mode: 'regenerate',
+        supersedesDraftId: draftId,
+        slackChannelId: payload.channel?.id,
+        slackThreadTs: payload.message?.thread_ts ?? payload.message?.ts,
+      })
+      return Response.json({ text: '🔄 Regenerating the draft…' }, { status: 200 })
+    }
+    case 'reject_draft': {
+      await db
+        .update(outreachDraftsTable)
+        .set({ status: 'rejected', updatedAt: new Date() })
+        .where(eq(outreachDraftsTable.id, draftId))
+      return Response.json({ text: '❌ Draft rejected.' }, { status: 200 })
+    }
+    default:
+      return new Response('', { status: 200 })
+  }
+}
+
+// ─── Inbound reply webhook (Sprint 8.2) ───────────────────────────────
+
+const ReplyWebhookSchema = z.object({
+  lead_id: z.string().uuid().optional(),
+  lead_email: z.string().optional(),
+  message_id: z.string().optional(),
+  body: z.string().min(1),
+  received_at: z.string(),
+  source: z.enum(['sendblue', 'email_imap', 'manual_forward', 'mock']),
+})
+
+/**
+ * Simple keyword intent classifier (Sprint 8.2). Hermes refines this in
+ * Sprint 9+ (BACKLOG-049). Order matters: unsubscribe wins over everything.
+ */
+function classifyReplyIntent(body: string): 'unsubscribe' | 'engaged' | 'declined' | null {
+  if (/\b(stop|baja|unsubscribe|desuscribir)\b/i.test(body)) return 'unsubscribe'
+  // Declined BEFORE engaged: "not interested" contains "interested", so the
+  // negation must win over the positive keyword.
+  if (/(no,? thanks|not interested|no gracias|no me interesa)/i.test(body)) return 'declined'
+  if (/(interested|let'?s chat|tell me more|interesa|hablemos)/i.test(body)) return 'engaged'
+  return null
+}
+
+/**
+ * POST /api/outreach/reply-webhook — inbound reply ingest (Sprint 8.2 mock).
+ *
+ * Signed with REPLY_WEBHOOK_SECRET (HMAC, replay window). Classifies intent,
+ * records the reply, auto-suppresses on STOP, and notifies the founder in
+ * Slack (threaded under the draft's approval thread when known).
+ */
+async function postOutreachReplyWebhook(req: Request): Promise<Response> {
+  const rawBody = await req.text()
+  if (
+    !verifyReplyWebhook({
+      rawBody,
+      signature: req.headers.get('x-spleed-reply-signature'),
+      timestamp: req.headers.get('x-spleed-reply-timestamp'),
+    })
+  ) {
+    return new Response('Unauthorized', { status: 401 })
+  }
+
+  let body: unknown
+  try {
+    body = JSON.parse(rawBody)
+  } catch {
+    return Response.json({ error: 'INVALID_JSON' }, { status: 400 })
+  }
+  const parsed = ReplyWebhookSchema.safeParse(body)
+  if (!parsed.success) {
+    return Response.json({ error: 'INVALID_BODY', issues: parsed.error.issues }, { status: 400 })
+  }
+  const p = parsed.data
+  if (!p.lead_id && !p.lead_email) {
+    return Response.json(
+      { error: 'INVALID_BODY', message: 'lead_id or lead_email is required' },
+      { status: 400 },
+    )
+  }
+
+  const db = getServiceClient()
+
+  // Lead lookup — lead_id is globally unique (gives org unambiguously);
+  // lead_email falls back to the most recent matching lead (best-effort,
+  // Sprint 9+ ties replies to a per-org webhook secret).
+  const [lead] = p.lead_id
+    ? await db
+        .select({ id: leadsTable.id, orgId: leadsTable.orgId, fullName: leadsTable.fullName, email: leadsTable.email })
+        .from(leadsTable)
+        .where(eq(leadsTable.id, p.lead_id))
+    : await db
+        .select({ id: leadsTable.id, orgId: leadsTable.orgId, fullName: leadsTable.fullName, email: leadsTable.email })
+        .from(leadsTable)
+        .where(eq(leadsTable.email, p.lead_email!))
+        .orderBy(desc(leadsTable.createdAt))
+        .limit(1)
+  if (!lead) {
+    return Response.json({ error: 'LEAD_NOT_FOUND' }, { status: 404 })
+  }
+
+  // Most recent sent draft (links the reply + carries Slack thread context).
+  const [recentDraft] = await db
+    .select()
+    .from(outreachDraftsTable)
+    .where(
+      and(
+        eq(outreachDraftsTable.leadId, lead.id),
+        eq(outreachDraftsTable.orgId, lead.orgId),
+        eq(outreachDraftsTable.status, 'sent'),
+      ),
+    )
+    .orderBy(desc(outreachDraftsTable.sentAt))
+    .limit(1)
+
+  const intent = classifyReplyIntent(p.body)
+
+  const [replyRow] = await db
+    .insert(outreachRepliesTable)
+    .values({
+      orgId: lead.orgId,
+      leadId: lead.id,
+      draftId: recentDraft?.id ?? null,
+      sourceProvider: p.source,
+      receivedAt: new Date(p.received_at),
+      body: p.body,
+      parsedIntent: intent, // null when unclassified
+      rawPayload: p as Record<string, unknown>,
+    })
+    .returning({ id: outreachRepliesTable.id })
+  const replyId = replyRow!.id
+
+  // Resolve Slack thread context from the draft's composer_metadata.
+  const meta = (recentDraft?.composerMetadata as Record<string, unknown>) ?? {}
+  const slackChannelId = (meta.slackChannelId as string | undefined) ?? null
+  const slackThreadTs =
+    (meta.slackThreadTs as string | undefined) ?? recentDraft?.approvalSlackTs ?? null
+
+  const notify = async (text: string, blocks?: Parameters<SlackClient['postMessage']>[0]['blocks']) => {
+    if (!slackChannelId) return
+    const tokens = await getSlackOAuthTokens(lead.orgId)
+    if (!tokens) return
+    try {
+      await new SlackClient({ token: tokens.bot_token }).postMessage({
+        channel: slackChannelId,
+        thread_ts: slackThreadTs ?? undefined,
+        text,
+        blocks,
+      })
+    } catch (err) {
+      console.error('[reply-webhook] slack notify failed', err)
+    }
+  }
+
+  if (intent === 'unsubscribe') {
+    if (lead.email) {
+      await db
+        .insert(outreachUnsubscribesTable)
+        .values({ orgId: lead.orgId, channel: 'email', identifier: lead.email, source: 'reply_stop' })
+        .onConflictDoNothing()
+    }
+    await notify(`🚫 *${lead.fullName ?? lead.id}* unsubscribed via reply.`)
+  } else {
+    // 'declined' and unclassified (null → 'other') both render FYI (no buttons).
+    const cardIntent: ReplyIntent =
+      intent === 'engaged' ? 'engaged' : intent === 'declined' ? 'declined' : 'other'
+    const blocks = buildReplyNotificationCard({
+      replyId,
+      leadName: lead.fullName ?? lead.id,
+      replyBody: p.body,
+      intent: cardIntent,
+    })
+    await notify(`📬 ${lead.fullName ?? lead.id} replied`, blocks)
+  }
+
+  return Response.json({ replyId, parsedIntent: intent }, { status: 200 })
+}
+
+// ─── Anthropic guided BYOK (Sprint 8.2 — Decision 9) ──────────────────
+
+/**
+ * GET /api/anthropic/install?orgId=<uuid> — self-contained setup wizard.
+ * Sprint 9-10 replaces this with a dashboard React flow; for now it's plain
+ * HTML+CSS+vanilla JS that POSTs the key to /api/anthropic/verify-key.
+ */
+async function getAnthropicInstall(req: Request): Promise<Response> {
+  const url = new URL(req.url)
+  const orgId = url.searchParams.get('orgId')
+  if (!orgId || !UUID_RE.test(orgId)) {
+    return Response.json({ error: 'INVALID_ORG_ID', message: 'orgId (UUID) query param required' }, { status: 400 })
+  }
+  const db = getServiceClient()
+  const [org] = await db.select({ id: orgsTable.id }).from(orgsTable).where(eq(orgsTable.id, orgId))
+  if (!org) {
+    return Response.json({ error: 'ORG_NOT_FOUND', message: `Org ${orgId} not found` }, { status: 404 })
+  }
+
+  const html = `<!doctype html><meta charset="utf-8"><title>Connect Claude · Spleed</title>
+<style>
+  body{font-family:system-ui;max-width:560px;margin:40px auto;padding:0 20px;color:#0A0A0A;line-height:1.5}
+  h1{font-size:1.6rem} ol{padding-left:1.2rem} li{margin:.5rem 0}
+  code{background:#FAFAF9;border:1px solid #e5e5e5;border-radius:6px;padding:1px 6px;font-size:.9em}
+  input{width:100%;padding:10px;border:1px solid #d4d4d4;border-radius:8px;font-family:monospace;margin:8px 0}
+  button{background:#FF6B35;color:#fff;border:0;border-radius:8px;padding:10px 18px;font-size:1rem;cursor:pointer}
+  #msg{margin-top:14px;font-weight:600} .ok{color:#16A34A} .err{color:#DC2626}
+  .note{color:#71717A;font-size:.85rem;margin-top:18px}
+</style>
+<h1>Connect your Claude key</h1>
+<ol>
+  <li>Go to <code>console.anthropic.com</code> → Settings → API Keys</li>
+  <li>Click <strong>Create Key</strong>, name it <strong>Spleed</strong>, and copy it</li>
+  <li>Paste it below and click Connect</li>
+</ol>
+<input id="key" type="password" placeholder="sk-ant-..." autocomplete="off" />
+<button onclick="verify()">Connect</button>
+<div id="msg"></div>
+<p class="note">Your key is encrypted in Spleed Vault and used only for your LLM calls. Costs stay visible in your Anthropic Console.</p>
+<script>
+  async function verify(){
+    const msg=document.getElementById('msg'); msg.textContent='Verifying…'; msg.className='';
+    const apiKey=document.getElementById('key').value.trim();
+    try{
+      const r=await fetch('/api/anthropic/verify-key',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({orgId:${JSON.stringify(orgId)},apiKey})});
+      const d=await r.json();
+      if(d.success){msg.textContent='✅ '+d.message+(d.plan_detected?(' ('+d.plan_detected+')'):'');msg.className='ok';}
+      else{msg.textContent='❌ '+(d.error||'Failed');msg.className='err';}
+    }catch(e){msg.textContent='❌ Network error';msg.className='err';}
+  }
+</script>`
+  return new Response(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } })
+}
+
+const AnthropicVerifyKeySchema = z.object({
+  orgId: z.string().uuid(),
+  apiKey: z.string().min(1),
+})
+
+/**
+ * POST /api/anthropic/verify-key — validate + store a tenant's Claude key.
+ * Mock-default testConnection accepts `sk-ant-test-*`; live (Sprint 9+) pings
+ * the real Messages API. On success: Vault store + orgs.anthropic_vault_ref/
+ * anthropic_connected_at.
+ */
+async function postAnthropicVerifyKey(req: Request): Promise<Response> {
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return Response.json({ success: false, error: 'INVALID_JSON' }, { status: 400 })
+  }
+  const parsed = AnthropicVerifyKeySchema.safeParse(body)
+  if (!parsed.success) {
+    return Response.json({ success: false, error: 'INVALID_BODY' }, { status: 400 })
+  }
+  const { orgId, apiKey } = parsed.data
+
+  if (!/^sk-ant-/.test(apiKey)) {
+    return Response.json({ success: false, error: 'INVALID_KEY' }, { status: 400 })
+  }
+
+  const result = await new AnthropicClient({ apiKey: 'mock' }).testConnection(apiKey)
+  if (!result.ok) {
+    return Response.json({ success: false, error: result.error ?? 'CONNECTION_FAILED' }, { status: 400 })
+  }
+
+  await storeAnthropicApiKey(orgId, apiKey)
+  const db = getServiceClient()
+  await db
+    .update(orgsTable)
+    .set({
+      anthropicVaultRef: `anthropic_api_key_${orgId}`,
+      anthropicConnectedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(orgsTable.id, orgId))
+
+  return Response.json(
+    { success: true, message: 'Claude connected', plan_detected: result.planDetected ?? null },
+    { status: 200 },
+  )
+}
+
 // ─── Bun.serve dispatch ───────────────────────────────────────────────
 
 const SCOUT_RUN_GET_RE = /^\/api\/scout\/runs\/([^/]+)$/
@@ -837,6 +1256,54 @@ export async function dispatch(req: Request): Promise<Response> {
         return await postSlackEvents(req)
       } catch (err) {
         console.error('[POST /api/slack/events] internal error', err)
+        return Response.json(
+          { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
+          { status: 500 },
+        )
+      }
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/slack/interactions') {
+      try {
+        return await postSlackInteractions(req)
+      } catch (err) {
+        console.error('[POST /api/slack/interactions] internal error', err)
+        return Response.json(
+          { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
+          { status: 500 },
+        )
+      }
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/outreach/reply-webhook') {
+      try {
+        return await postOutreachReplyWebhook(req)
+      } catch (err) {
+        console.error('[POST /api/outreach/reply-webhook] internal error', err)
+        return Response.json(
+          { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
+          { status: 500 },
+        )
+      }
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/anthropic/verify-key') {
+      try {
+        return await postAnthropicVerifyKey(req)
+      } catch (err) {
+        console.error('[POST /api/anthropic/verify-key] internal error', err)
+        return Response.json(
+          { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
+          { status: 500 },
+        )
+      }
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/anthropic/install') {
+      try {
+        return await getAnthropicInstall(req)
+      } catch (err) {
+        console.error('[GET /api/anthropic/install] internal error', err)
         return Response.json(
           { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
           { status: 500 },

@@ -126,3 +126,45 @@ export const costProviderEnum = pgEnum('cost_provider', [
   // Sprint 6 — Vercel agent-browser for company website + news scraping (Profiler).
   'vercel_browser',
 ])
+
+// Sprint 8 — Composer + Outreach pipeline (drafts, unsubscribes, replies).
+// pgEnum (not text+CHECK) to match every other enumerated column in this
+// schema (lead_status, outreach_status, cost_provider, …).
+
+// outreach_drafts lifecycle. Composer (service role) inserts 'pending_approval';
+// the Slack approval handler / dashboard transitions the rest. 'regenerated'
+// marks a superseded draft when the founder hits 🔄 Regenerate (Sprint 8.2).
+export const outreachDraftStatusEnum = pgEnum('outreach_draft_status', [
+  'pending_approval',
+  'approved',
+  'sent',
+  'rejected',
+  'regenerated',
+  'failed',
+])
+
+// How an unsubscribe was captured. 'link_click' (microsite/email link),
+// 'reply_stop' (STOP/UNSUBSCRIBE in a reply), 'manual' (founder), 'webhook'.
+export const outreachUnsubscribeSourceEnum = pgEnum('outreach_unsubscribe_source', [
+  'link_click',
+  'reply_stop',
+  'manual',
+  'webhook',
+])
+
+// Where an inbound reply arrived from. 'mock' covers Sprint 8 testing before
+// Sendblue/IMAP live wiring (Sprint 9+).
+export const outreachReplyProviderEnum = pgEnum('outreach_reply_provider', [
+  'sendblue',
+  'email_imap',
+  'manual_forward',
+  'mock',
+])
+
+// LLM-classified intent of an inbound reply (nullable column — null = unclassified).
+export const outreachReplyIntentEnum = pgEnum('outreach_reply_intent', [
+  'engaged',
+  'declined',
+  'unsubscribe',
+  'other',
+])

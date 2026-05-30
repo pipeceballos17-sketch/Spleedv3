@@ -103,6 +103,8 @@ async function loadCardInputFromDb(args: {
       role: leadsTable.role,
       company: leadsTable.company,
       companyDomain: leadsTable.companyDomain,
+      email: leadsTable.email,
+      linkedinUrl: leadsTable.linkedinUrl,
     })
     .from(leadsTable)
     .where(and(eq(leadsTable.id, leadId), eq(leadsTable.orgId, orgId)))
@@ -134,6 +136,8 @@ async function loadCardInputFromDb(args: {
       role: lead.role,
       company: lead.company,
       companyDomain: lead.companyDomain,
+      email: lead.email,
+      linkedinUrl: lead.linkedinUrl,
     },
     recommendedAngle: synthesis.recommendedAngle ?? 'No outreach angle surfaced.',
     confidenceScore: dossier.confidenceScore ?? synthesis.confidenceScore ?? 0,

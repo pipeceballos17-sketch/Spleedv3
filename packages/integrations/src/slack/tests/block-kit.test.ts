@@ -34,6 +34,8 @@ describe('buildDossierCard — Sprint 7c', () => {
         role: 'Founder & CEO',
         company: 'Pulse Analytics',
         companyDomain: 'pulseanalytics.io',
+        email: 'sarah@pulseanalytics.io',
+        linkedinUrl: 'https://linkedin.com/in/sarahchen',
       },
       recommendedAngle:
         "Tie Sarah's Series A to Brian's CSO appointment as evidence of a deliberate scaling playbook.",
@@ -53,13 +55,15 @@ describe('buildDossierCard — Sprint 7c', () => {
 
     const blocks = buildDossierCard(input)
 
-    // Full card: header + subtitle + 2 dividers + angle + hooks-header + 3
-    // hooks + DR divider + DR header + 4 category sections + footer divider +
-    // footer = 17.
-    expect(blocks.length).toBe(17)
+    // Full card: header + subtitle + contact + 2 dividers + angle +
+    // hooks-header + 3 hooks + DR divider + DR header + 4 category sections +
+    // footer divider + footer = 18 (Sprint 8.2 added the contact section).
+    expect(blocks.length).toBe(18)
     expect(headerText(blocks)).toBe('Sarah Chen')
 
     const sections = sectionTexts(blocks)
+    // Contact section shows the lead's email.
+    expect(sections.some((s) => s.includes('Contact') && s.includes('sarah@pulseanalytics.io'))).toBe(true)
     expect(sections.some((s) => s.includes('Recommended angle'))).toBe(true)
     expect(sections.some((s) => s.includes('Top Hooks'))).toBe(true)
     expect(sections.some((s) => s.includes('Deep Research Findings'))).toBe(true)
@@ -95,13 +99,15 @@ describe('buildDossierCard — Sprint 7c', () => {
 
     const blocks = buildDossierCard(input)
 
-    // header + subtitle + 2 dividers + angle + hooks-header (0 hooks) +
-    // footer divider + footer = 8. No DR section.
-    expect(blocks.length).toBe(8)
+    // header + subtitle + contact (no-data warning) + 2 dividers + angle +
+    // hooks-header (0 hooks) + footer divider + footer = 9 (Sprint 8.2 contact).
+    expect(blocks.length).toBe(9)
     expect(headerText(blocks)).toBe('Henry Wallace')
 
     const sections = sectionTexts(blocks)
     expect(sections.some((s) => s.includes('Deep Research Findings'))).toBe(false)
+    // No contact data → warning section.
+    expect(sections.some((s) => s.includes('No contact data extracted yet'))).toBe(true)
 
     // Footer reflects 3 sources (deep research produced nothing).
     expect(footerText(blocks)).toContain('3 sources')

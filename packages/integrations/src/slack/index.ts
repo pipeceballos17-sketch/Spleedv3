@@ -1,10 +1,15 @@
 export { SlackClient, SlackWebhookClient, type SlackClientConfig } from './client'
 export type {
+  ApprovalChannel,
+  BuildApprovalCardInput,
+  BuildReplyNotificationCardInput,
+  ReplyIntent,
   BuildDossierCardInput,
   DossierCardDeepResearch,
   DossierCardDeepResearchCategory,
   DossierCardHook,
   DossierCardLeadShape,
+  SlackButton,
   QuotaExhaustedPayload,
   ScoutFailurePayload,
   SlackBlock,
@@ -18,7 +23,7 @@ export type {
   SlackTokens,
   SlackUserInfo,
 } from './types'
-export { buildDossierCard } from './block-kit'
+export { buildDossierCard, buildApprovalCard, buildReplyNotificationCard } from './block-kit'
 export { verifySlackSignature, type VerifySlackSignatureInput } from './signature'
 export {
   storeSlackOAuthTokens,

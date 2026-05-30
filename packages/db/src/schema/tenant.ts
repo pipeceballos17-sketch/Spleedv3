@@ -61,6 +61,14 @@ export const orgs = pgTable(
     slackBotUserId: text('slack_bot_user_id'),
     slackConnectedAt: timestamp('slack_connected_at', { withTimezone: true }),
 
+    // Sprint 8 — Anthropic BYOK (Decision 9). Mirrors the Slack columns above:
+    // the real API key lives in Supabase Vault keyed by `anthropic_{orgId}`
+    // (anthropic_vault_ref holds the secret reference); these columns are the
+    // connection index/timestamp. Guided BYOK wizard + Vault wiring land in
+    // Sprint 8.2; Sprint 8.1 only adds the columns.
+    anthropicVaultRef: text('anthropic_vault_ref'),
+    anthropicConnectedAt: timestamp('anthropic_connected_at', { withTimezone: true }),
+
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
