@@ -133,6 +133,8 @@ const MOCK_PROFILES: Record<string, LinkedinProfile> = {
   'linkedin.com/in/lauraperezedu': {
     fullName: 'Laura Pérez',
     headline: 'Directora Académica · Colegio San Andrés · Medellín, Colombia',
+    // Sprint 9 — contact phone surfaced via LinkedIn contact info (curated).
+    phone: '+57 1 234 5678',
     currentPosition: {
       title: 'Directora Académica',
       company: 'Colegio San Andrés',
@@ -163,6 +165,9 @@ const MOCK_PROFILES: Record<string, LinkedinProfile> = {
   'linkedin.com/in/diegorestrepo': {
     fullName: 'Diego Restrepo',
     headline: 'CEO · Andean Factoring · Bogotá',
+    // No LinkedIn phone for Diego — his number is published on the company
+    // website instead (see andeanfactoring.co contactPhone), exercising the
+    // company-website extraction source.
     currentPosition: {
       title: 'CEO',
       company: 'Andean Factoring',

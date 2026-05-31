@@ -152,8 +152,9 @@ async function loadComposerContextFromDb(args: {
       role: lead.role ?? 'Unknown',
       companyDomain: lead.companyDomain,
       email: lead.email,
-      // phone unsourced in Sprint 8 (no leads.phone column / extraction yet).
-      phone: null,
+      // Sprint 9 — real lead.phone (Profiler extraction populates it). Phase 0
+      // channel recommendation now routes iMessage when a phone is on file.
+      phone: lead.phone,
       linkedinUrl: lead.linkedinUrl,
     },
     icp: {

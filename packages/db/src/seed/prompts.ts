@@ -283,7 +283,15 @@ Input: the ICP natural-language description and any detected industry context.
 
 Output JSON: {
   "voice_guidance": "2-4 sentences: formality, language, tone, and what kind of signal to lead with for this audience",
-  "footer_template": "a compliant footer with {{company}}, {{sender_name}}, {{sender_company}} placeholders and an opt-out mechanism"
+  "footer_template": "a compliant footer with {{company}}, {{sender_name}}, {{sender_company}} placeholders and an opt-out mechanism",
+  "recommended_sources": [
+    {
+      "id": "snake_case_stable_id",
+      "label": "Human readable name",
+      "access": "http_api" | "browser_scrape" | "manual",
+      "relevance": "1 sentence: why this source matters for THIS ICP"
+    }
+  ]
 }
 
 Rules:
@@ -291,6 +299,8 @@ Rules:
 - Stay industry-AGNOSTIC in structure: derive the voice from the description, do not assume a fixed vertical taxonomy.
 - footer_template MUST include an opt-out mechanism and sender identification placeholders.
 - Keep voice_guidance actionable and concise.
+- recommended_sources: 3-6 PUBLIC data sources relevant to THIS ICP's industry + region, DERIVED from the description (not a fixed taxonomy). Prefer free/public sources — government registries, regulatory filings, public APIs. Set "access" as a hint for how the source would be fetched.
+- DERIVE, don't hardcode: a factoring ICP might yield SEC EDGAR + state UCC + FMCSA; a Colombian schools ICP might yield ICFES + Ministerio de Educación registries; a SaaS ICP might yield Crunchbase + product changelogs. A generic or unclear ICP should return FEWER or an EMPTY array rather than guessing.
 
 Return ONLY valid JSON. No preamble, no markdown fences.`
 

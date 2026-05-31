@@ -29,6 +29,7 @@ export type {
   IcpStarterGuidance,
   OutreachAngle,
   QualityVerdict,
+  RecommendedSource,
   SelectHookInput,
   SelectHookResult,
   SelectedHook,

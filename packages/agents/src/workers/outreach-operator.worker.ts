@@ -3,30 +3,35 @@ import { z } from 'zod'
 import {
   costEvents,
   leads as leadsTable,
+  orgs as orgsTable,
   outreachDrafts as outreachDraftsTable,
   outreachUnsubscribes as outreachUnsubscribesTable,
   type DbClient,
 } from '@spleed/db'
+import { ResendClient } from '@spleed/integrations/resend'
 import { SlackClient, getSlackOAuthTokens } from '@spleed/integrations/slack'
 import type { WorkerContext } from './context'
 import { defineWorker } from './define'
 
+/** Mock 'from' when the org hasn't set a verified sender (mock mode only). */
+const MOCK_FROM_PLACEHOLDER = 'outreach@example.com'
+
 /**
- * Sprint 8.2 Outreach Operator worker (skeleton). Enqueued when a founder
- * approves a draft (Slack ✅ Approve & Send). Flow:
+ * Outreach Operator worker. Enqueued when a founder approves a draft
+ * (Slack ✅ Approve & Send). Flow:
  *
- *   1. Load the approved draft + lead.
+ *   1. Load the approved draft + lead + org sender identity.
  *   2. Re-verify compliance (the founder may have added the lead to the
  *      unsubscribe list between draft + approve) → cancel + status='failed'.
- *   3. Deliver — MOCK in Sprint 8.2 (logs the send). Live SMTP/Sendblue is
- *      deferred to Sprint 9+ (BACKLOG-048); SENDBLUE_LIVE / EMAIL_SMTP_LIVE
- *      throw loud.
+ *   3. Deliver:
+ *      - email → ResendClient (Sprint 9 CP4: wired, mock-default; live behind
+ *        RESEND_LIVE — Felipe's deliberate Sprint 9.5 first-send).
+ *      - imessage → MOCK stub (Sendblue not wired; SENDBLUE_LIVE throws,
+ *        BACKLOG-048).
  *   4. status='sent', sent_at=now + a delivery cost_event (cost 0 in mock).
  *   5. Threaded Slack confirmation ("✅ Sent to {lead} via {channel}").
  *
- * cost_events.agent_type uses 'outreach' (the agent_kind enum value; the
- * worker is the "Outreach Operator" but the enum predates the longer name).
- *
+ * cost_events.agent_type uses 'outreach' (the agent_kind enum value).
  * Injectable seams (slack / loadDraft / send) keep tests + demos offline.
  */
 const OutreachDeliveryJobSchema = z.object({
@@ -55,6 +60,8 @@ export interface OutreachDeliveryContext {
   /** Slack DM channel the approval card was posted to (composer stamps it). */
   slackChannelId: string | null
   slackThreadTs: string | null
+  /** orgs.sender_email — the verified 'from' for live email (null until set). */
+  senderEmail: string | null
 }
 
 /** Result of a (mock or live) send. */
@@ -95,6 +102,11 @@ async function loadOutreachDraftFromDb(args: {
     .from(leadsTable)
     .where(and(eq(leadsTable.id, draft.leadId), eq(leadsTable.orgId, orgId)))
 
+  const [org] = await raw
+    .select({ senderEmail: orgsTable.senderEmail })
+    .from(orgsTable)
+    .where(eq(orgsTable.id, orgId))
+
   const meta = (draft.composerMetadata as Record<string, unknown>) ?? {}
   return {
     leadId: draft.leadId,
@@ -105,17 +117,20 @@ async function loadOutreachDraftFromDb(args: {
     approvalSlackTs: draft.approvalSlackTs,
     slackChannelId: (meta.slackChannelId as string | undefined) ?? null,
     slackThreadTs: (meta.slackThreadTs as string | undefined) ?? null,
+    senderEmail: org?.senderEmail ?? null,
   }
 }
 
-/** Mock delivery — Sprint 8.2 logs the send and returns a synthetic id. */
+/**
+ * Guard the channels that still lack a live provider. Email is wired through
+ * ResendClient (Sprint 9 CP4), so RESEND_LIVE is honored by the client itself —
+ * no throw here. iMessage/Sendblue stays a stub: SENDBLUE_LIVE throws loud
+ * (BACKLOG-048).
+ */
 function liveDeliveryGuard(channel: 'email' | 'imessage'): void {
-  const live =
-    (channel === 'email' && process.env.EMAIL_SMTP_LIVE === 'true') ||
-    (channel === 'imessage' && process.env.SENDBLUE_LIVE === 'true')
-  if (live) {
+  if (channel === 'imessage' && process.env.SENDBLUE_LIVE === 'true') {
     throw new Error(
-      `[outreach-operator] live ${channel} delivery not implemented in Sprint 8.2 — wire real provider in Sprint 9+ (BACKLOG-048)`,
+      '[outreach-operator] live imessage delivery (Sendblue) not implemented — wire real provider in Sprint 9+ (BACKLOG-048)',
     )
   }
 }
@@ -173,17 +188,31 @@ export async function processOutreachDeliveryJob(
     }
   }
 
-  // ─── 3. Deliver (mock-default; live throws) ────────────────────────
+  // ─── 3. Deliver (email → Resend mock-default; imessage → stub) ─────
   liveDeliveryGuard(channel)
   const recipient = channel === 'email' ? draftCtx.leadEmail : null
   const send =
     overrides.send ??
-    (async () => {
+    (async (args: { channel: 'email' | 'imessage'; recipient: string | null; subject: string | null; body: string }) => {
+      if (args.channel === 'email') {
+        // ResendClient is mock-default (RESEND_LIVE !== 'true' → synthetic id,
+        // no network). The first live send is Felipe's deliberate Sprint 9.5
+        // action. sender_email is the founder-set verified 'from'; the
+        // placeholder only ever ships in mock.
+        const result = await new ResendClient({ orgId }).send({
+          from: draftCtx.senderEmail ?? MOCK_FROM_PLACEHOLDER,
+          to: args.recipient ?? '',
+          subject: args.subject ?? '(no subject)',
+          text: args.body,
+        })
+        return { providerMessageId: result.id }
+      }
+      // imessage — still a mock log (Sendblue not wired).
       ctx.logger.info(
-        { orgId, draftId, channel, recipient, bodyLength: draftCtx.body.length },
-        '[outreach-operator] MOCK send',
+        { orgId, draftId, channel: args.channel, recipient: args.recipient, bodyLength: args.body.length },
+        '[outreach-operator] MOCK imessage send',
       )
-      return { providerMessageId: `mock-${channel}-${draftId}` }
+      return { providerMessageId: `mock-${args.channel}-${draftId}` }
     })
   const ack = await send({ channel, recipient, subject: draftCtx.subject, body: draftCtx.body })
 

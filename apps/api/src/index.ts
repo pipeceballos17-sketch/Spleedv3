@@ -35,6 +35,7 @@ import {
   type SlackMessageImEvent,
 } from '@spleed/integrations/slack'
 import { AnthropicClient, storeAnthropicApiKey } from '@spleed/integrations/anthropic'
+import { ResendClient, storeResendApiKey } from '@spleed/integrations/resend'
 import { signOAuthState, verifyOAuthState } from './helpers/slack-oauth-state'
 import { verifyReplyWebhook } from './helpers/reply-webhook-signature'
 import { startWorkers } from './workers/start'
@@ -1207,6 +1208,113 @@ async function postAnthropicVerifyKey(req: Request): Promise<Response> {
   )
 }
 
+// ─── Resend guided BYOK (Sprint 9 CP4 — email delivery) ───────────────
+
+/**
+ * GET /api/resend/install?orgId=<uuid> — self-contained setup wizard.
+ * Mirrors the Anthropic flow: plain HTML that POSTs the key (+ optional
+ * sender email) to /api/resend/verify-key. Dashboard React flow replaces
+ * this in Sprint 9-10.
+ */
+async function getResendInstall(req: Request): Promise<Response> {
+  const url = new URL(req.url)
+  const orgId = url.searchParams.get('orgId')
+  if (!orgId || !UUID_RE.test(orgId)) {
+    return Response.json({ error: 'INVALID_ORG_ID', message: 'orgId (UUID) query param required' }, { status: 400 })
+  }
+  const db = getServiceClient()
+  const [org] = await db.select({ id: orgsTable.id }).from(orgsTable).where(eq(orgsTable.id, orgId))
+  if (!org) {
+    return Response.json({ error: 'ORG_NOT_FOUND', message: `Org ${orgId} not found` }, { status: 404 })
+  }
+
+  const html = `<!doctype html><meta charset="utf-8"><title>Connect Resend · Spleed</title>
+<style>
+  body{font-family:system-ui;max-width:560px;margin:40px auto;padding:0 20px;color:#0A0A0A;line-height:1.5}
+  h1{font-size:1.6rem} ol{padding-left:1.2rem} li{margin:.5rem 0}
+  code{background:#FAFAF9;border:1px solid #e5e5e5;border-radius:6px;padding:1px 6px;font-size:.9em}
+  input{width:100%;padding:10px;border:1px solid #d4d4d4;border-radius:8px;font-family:monospace;margin:8px 0}
+  button{background:#FF6B35;color:#fff;border:0;border-radius:8px;padding:10px 18px;font-size:1rem;cursor:pointer}
+  #msg{margin-top:14px;font-weight:600} .ok{color:#16A34A} .err{color:#DC2626}
+  .note{color:#71717A;font-size:.85rem;margin-top:18px}
+</style>
+<h1>Connect Resend for email</h1>
+<ol>
+  <li>Go to <code>resend.com</code> → API Keys → <strong>Create API Key</strong></li>
+  <li>Verify your sending domain under <code>Domains</code> first (required to send)</li>
+  <li>Paste the key + the verified <strong>from</strong> address below</li>
+</ol>
+<input id="key" type="password" placeholder="re_..." autocomplete="off" />
+<input id="sender" type="email" placeholder="founder@yourdomain.com (verified sender)" autocomplete="off" />
+<button onclick="verify()">Connect</button>
+<div id="msg"></div>
+<p class="note">Your key is encrypted in Spleed Vault and used only to send your outbound email. Sending stays paused until you flip it on.</p>
+<script>
+  async function verify(){
+    const msg=document.getElementById('msg'); msg.textContent='Verifying…'; msg.className='';
+    const apiKey=document.getElementById('key').value.trim();
+    const senderEmail=document.getElementById('sender').value.trim();
+    try{
+      const r=await fetch('/api/resend/verify-key',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({orgId:${JSON.stringify(orgId)},apiKey,senderEmail:senderEmail||undefined})});
+      const d=await r.json();
+      if(d.success){msg.textContent='✅ '+d.message;msg.className='ok';}
+      else{msg.textContent='❌ '+(d.error||'Failed');msg.className='err';}
+    }catch(e){msg.textContent='❌ Network error';msg.className='err';}
+  }
+</script>`
+  return new Response(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } })
+}
+
+const ResendVerifyKeySchema = z.object({
+  orgId: z.string().uuid(),
+  apiKey: z.string().min(1),
+  senderEmail: z.string().email().optional(),
+})
+
+/**
+ * POST /api/resend/verify-key — validate + store a tenant's Resend key.
+ * Mock-default testConnection accepts `re_*`; live (Sprint 9.5+) pings
+ * GET /domains. On success: Vault store + orgs.resend_vault_ref/
+ * resend_connected_at, and orgs.sender_email when provided (single-step
+ * onboarding — the verified 'from' the Outreach Operator sends with).
+ */
+async function postResendVerifyKey(req: Request): Promise<Response> {
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return Response.json({ success: false, error: 'INVALID_JSON' }, { status: 400 })
+  }
+  const parsed = ResendVerifyKeySchema.safeParse(body)
+  if (!parsed.success) {
+    return Response.json({ success: false, error: 'INVALID_BODY' }, { status: 400 })
+  }
+  const { orgId, apiKey, senderEmail } = parsed.data
+
+  if (!/^re_/.test(apiKey)) {
+    return Response.json({ success: false, error: 'INVALID_KEY' }, { status: 400 })
+  }
+
+  const result = await new ResendClient({ mockMode: true }).testConnection(apiKey)
+  if (!result.ok) {
+    return Response.json({ success: false, error: result.error ?? 'CONNECTION_FAILED' }, { status: 400 })
+  }
+
+  await storeResendApiKey(orgId, apiKey)
+  const db = getServiceClient()
+  await db
+    .update(orgsTable)
+    .set({
+      resendVaultRef: `resend_api_key_${orgId}`,
+      resendConnectedAt: new Date(),
+      ...(senderEmail ? { senderEmail } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(orgsTable.id, orgId))
+
+  return Response.json({ success: true, message: 'Resend connected' }, { status: 200 })
+}
+
 // ─── Bun.serve dispatch ───────────────────────────────────────────────
 
 const SCOUT_RUN_GET_RE = /^\/api\/scout\/runs\/([^/]+)$/
@@ -1304,6 +1412,30 @@ export async function dispatch(req: Request): Promise<Response> {
         return await getAnthropicInstall(req)
       } catch (err) {
         console.error('[GET /api/anthropic/install] internal error', err)
+        return Response.json(
+          { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
+          { status: 500 },
+        )
+      }
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/resend/verify-key') {
+      try {
+        return await postResendVerifyKey(req)
+      } catch (err) {
+        console.error('[POST /api/resend/verify-key] internal error', err)
+        return Response.json(
+          { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
+          { status: 500 },
+        )
+      }
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/resend/install') {
+      try {
+        return await getResendInstall(req)
+      } catch (err) {
+        console.error('[GET /api/resend/install] internal error', err)
         return Response.json(
           { error: 'INTERNAL', message: err instanceof Error ? err.message : 'unknown' },
           { status: 500 },

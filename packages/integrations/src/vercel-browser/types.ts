@@ -25,6 +25,12 @@ export interface CompanyWebsitePageContent {
   teamText?: string
   /** /news, /blog, /press landing text if discoverable. */
   newsText?: string
+  /**
+   * Sprint 9 — phone discovered on a contact/footer/about page. Mock returns
+   * curated values; live mode (Sprint 9+) regexes it out of mainText/contact
+   * pages. Raw form — Profiler normalizes to E.164 before persisting.
+   */
+  contactPhone?: string
 }
 
 export interface CompanyWebsiteScrapeMetadata {

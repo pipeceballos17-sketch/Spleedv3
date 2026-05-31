@@ -1573,7 +1573,9 @@ export const MOCK_COMPOSER_DRAFT_TOKENS_OUT = 1500
 export const MOCK_COMPOSER_QUALITY_TOKENS_IN = 1000
 export const MOCK_COMPOSER_QUALITY_TOKENS_OUT = 300
 export const MOCK_ICP_STARTER_TOKENS_IN = 800
-export const MOCK_ICP_STARTER_TOKENS_OUT = 400
+// Sprint 9 CP3 — bumped 400→600: recommended_sources (3-6 objects) adds ~200
+// output tokens to the guidance payload.
+export const MOCK_ICP_STARTER_TOKENS_OUT = 600
 
 /**
  * Deterministic per-step latency band (~1.2-3.0s/step → ~6-12s for the 4
@@ -1859,6 +1861,11 @@ export function mockGenerateIcpStarterGuidance(descriptionHint?: string): IcpSta
       voiceGuidance:
         'Warm, peer-to-peer, concise. Lead with a concrete growth signal (hiring, raise). Avoid jargon; respect that decision makers are time-poor operators.',
       footerTemplate: '{{company}} · Reply STOP to opt out · {{sender_name}}, {{sender_company}}',
+      recommendedSources: [
+        { id: 'sec_edgar', label: 'SEC EDGAR filings', access: 'http_api', relevance: 'Public 10-K/10-Q reveal borrower base composition and portfolio quality for public lenders.' },
+        { id: 'ucc_state', label: 'State UCC lien filings', access: 'browser_scrape', relevance: 'Lien filing counts and terminations signal active deal flow and portfolio churn.' },
+        { id: 'fmcsa_socrata', label: 'FMCSA carrier registry', access: 'http_api', relevance: 'For transport-factoring, carrier health (MCS-150 lapses) flags financial stress in the customer base.' },
+      ],
     }
   }
   if (/escuela|colegio|liceo|universidad|educa|school/.test(lower)) {
@@ -1866,6 +1873,10 @@ export function mockGenerateIcpStarterGuidance(descriptionHint?: string): IcpSta
       voiceGuidance:
         'Formal and respectful (usted in Spanish). Reference institutional milestones (accreditations, alliances). Emphasize trust and community over speed.',
       footerTemplate: '{{company}} · Para darse de baja responda STOP · {{sender_name}}, {{sender_company}}',
+      recommendedSources: [
+        { id: 'icfes', label: 'ICFES results (Colombia)', access: 'http_api', relevance: 'Standardized test performance signals institutional quality and competitive positioning.' },
+        { id: 'men_registry', label: 'Ministerio de Educación registry', access: 'browser_scrape', relevance: 'Accreditation status and official recognition are trust signals for school decision-makers.' },
+      ],
     }
   }
   if (/saas|startup|founder|software/.test(lower)) {
@@ -1873,13 +1884,20 @@ export function mockGenerateIcpStarterGuidance(descriptionHint?: string): IcpSta
       voiceGuidance:
         'Direct, founder-to-founder, lightly informal. Reference a specific recent signal (funding, key hire, launch). Short paragraphs; one clear CTA.',
       footerTemplate: '{{company}} · Unsubscribe · {{sender_name}}, {{sender_company}}',
+      recommendedSources: [
+        { id: 'crunchbase', label: 'Crunchbase company profile', access: 'http_api', relevance: 'Funding rounds and headcount growth signal GTM scaling intent and budget.' },
+        { id: 'github_org', label: 'GitHub org activity', access: 'http_api', relevance: 'Commit and release cadence indicates engineering velocity and build-vs-buy posture.' },
+        { id: 'tech_press', label: 'Tech press (TechCrunch / news)', access: 'browser_scrape', relevance: 'Launch and funding coverage surfaces timely, specific outreach hooks.' },
+      ],
     }
   }
-  // Universal fallback.
+  // Universal fallback — generic ICP yields no confident source picks (honest
+  // horizontal behavior: empty rather than guessed).
   return {
     voiceGuidance:
       'Professional and concise. Open with a specific, verifiable reason for reaching out. One value proposition, one clear CTA. No buzzword stacking.',
     footerTemplate: '{{company}} · Reply STOP or unsubscribe to opt out · {{sender_name}}, {{sender_company}}',
+    recommendedSources: [],
   }
 }
 

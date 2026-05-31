@@ -122,6 +122,9 @@ const MOCK_COMPANY_WEBSITES: Record<string, CompanyWebsiteScrapeResult> = {
         'Andean Factoring fue fundada por Diego Restrepo en 2008. La compañía mantiene calificación de riesgo BRC1+ desde 2019.',
       newsText:
         'Enero 2026: Andean firma línea de crédito con Bancolombia por COP 50 mil millones para ampliar operaciones en el Eje Cafetero.',
+      // Sprint 9 — contact line published on the website (curated). Exercises
+      // the company-website phone extraction source.
+      contactPhone: '+57 1 555 1234',
     },
     metadata: {
       finalUrl: 'https://andeanfactoring.co/',

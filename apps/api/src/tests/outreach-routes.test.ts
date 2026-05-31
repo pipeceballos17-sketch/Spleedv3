@@ -1,8 +1,9 @@
 /**
- * Sprint 8.2 — outreach + BYOK route tests (4 tests).
+ * Sprint 8.2 + Sprint 9 CP4 — outreach + BYOK route tests (6 tests).
  *
- * Reply webhook ingest + STOP auto-unsubscribe, and Anthropic guided BYOK
- * happy/invalid paths. Drives dispatch with synthetic Requests.
+ * Reply webhook ingest + STOP auto-unsubscribe, Anthropic guided BYOK, and
+ * Resend guided BYOK (Sprint 9 CP4) happy/invalid paths. Drives dispatch with
+ * synthetic Requests.
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'bun:test'
@@ -17,6 +18,7 @@ import {
   users,
 } from '@spleed/db'
 import { getAnthropicApiKey, resetMockAnthropicTokenStore } from '@spleed/integrations/anthropic'
+import { getResendApiKey, resetMockResendTokenStore } from '@spleed/integrations/resend'
 import { dispatch } from '../index'
 import { signReplyWebhook } from '../helpers/reply-webhook-signature'
 
@@ -48,6 +50,14 @@ function verifyKeyRequest(apiKey: string): Request {
   })
 }
 
+function verifyResendKeyRequest(apiKey: string, senderEmail?: string): Request {
+  return new Request('http://localhost:3001/api/resend/verify-key', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ orgId: ORG, apiKey, ...(senderEmail ? { senderEmail } : {}) }),
+  })
+}
+
 beforeAll(async () => {
   process.env.SLACK_SIGNING_SECRET = 'outreach-routes-signing'
   process.env.REPLY_WEBHOOK_SECRET = 'outreach-routes-reply'
@@ -69,10 +79,20 @@ afterAll(async () => {
 
 beforeEach(async () => {
   resetMockAnthropicTokenStore()
+  resetMockResendTokenStore()
   const db = getServiceClient()
   await db.delete(outreachRepliesTable).where(eq(outreachRepliesTable.orgId, ORG))
   await db.delete(outreachUnsubscribesTable).where(eq(outreachUnsubscribesTable.orgId, ORG))
-  await db.update(orgs).set({ anthropicVaultRef: null, anthropicConnectedAt: null }).where(eq(orgs.id, ORG))
+  await db
+    .update(orgs)
+    .set({
+      anthropicVaultRef: null,
+      anthropicConnectedAt: null,
+      resendVaultRef: null,
+      resendConnectedAt: null,
+      senderEmail: null,
+    })
+    .where(eq(orgs.id, ORG))
 })
 
 describe('POST /api/outreach/reply-webhook', () => {
@@ -125,5 +145,33 @@ describe('Anthropic guided BYOK', () => {
     expect(body.success).toBe(false)
     expect(body.error).toBe('INVALID_KEY')
     expect(await getAnthropicApiKey(ORG)).toBeNull()
+  })
+})
+
+describe('Resend guided BYOK (Sprint 9 CP4)', () => {
+  it('happy path: re_ key + sender → 200 + Vault store + orgs stamped (ref/connectedAt/sender)', async () => {
+    const res = await dispatch(verifyResendKeyRequest('re_routes_test_123', 'founder@acme.com'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { success: boolean; message: string }
+    expect(body.success).toBe(true)
+
+    expect(await getResendApiKey(ORG)).toBe('re_routes_test_123')
+    const db = getServiceClient()
+    const [org] = await db.select().from(orgs).where(eq(orgs.id, ORG))
+    expect(org?.resendVaultRef).toBe(`resend_api_key_${ORG}`)
+    expect(org?.resendConnectedAt).toBeInstanceOf(Date)
+    expect(org?.senderEmail).toBe('founder@acme.com')
+  })
+
+  it('invalid key format (not re_) → 400 INVALID_KEY, nothing stored', async () => {
+    const res = await dispatch(verifyResendKeyRequest('sk-wrong-prefix'))
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { success: boolean; error: string }
+    expect(body.success).toBe(false)
+    expect(body.error).toBe('INVALID_KEY')
+    expect(await getResendApiKey(ORG)).toBeNull()
+    const db = getServiceClient()
+    const [org] = await db.select().from(orgs).where(eq(orgs.id, ORG))
+    expect(org?.resendVaultRef).toBeNull()
   })
 })

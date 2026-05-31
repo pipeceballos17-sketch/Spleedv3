@@ -32,6 +32,13 @@ export interface LinkedinEducation {
 export interface LinkedinProfile {
   fullName: string
   headline: string
+  /**
+   * Sprint 9 — contact phone when the profile/contact-info surfaces one.
+   * Mock returns curated values; live mode (Sprint 9+) reads the Apify
+   * contact-info actor's `contact.phone`. Raw form — Profiler normalizes to
+   * E.164 before persisting to leads.phone.
+   */
+  phone?: string
   /** Most recent role with no endDate. Absent for retired or job-hunting profiles. */
   currentPosition?: LinkedinPosition
   /** Reverse-chronological. Most recent first. */

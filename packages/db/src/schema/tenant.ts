@@ -69,6 +69,14 @@ export const orgs = pgTable(
     anthropicVaultRef: text('anthropic_vault_ref'),
     anthropicConnectedAt: timestamp('anthropic_connected_at', { withTimezone: true }),
 
+    // Sprint 9 CP4 (Migration 0012) — Resend BYOK (email delivery). Same triad
+    // pattern as Anthropic: the real key lives in Supabase Vault keyed by
+    // `resend_api_key_{orgId}` (resend_vault_ref is the reference). sender_email
+    // is the founder-set, Resend-verified 'from' address for outbound email.
+    resendVaultRef: text('resend_vault_ref'),
+    resendConnectedAt: timestamp('resend_connected_at', { withTimezone: true }),
+    senderEmail: text('sender_email'),
+
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

@@ -48,6 +48,7 @@ import {
   resetMockSlackSends,
 } from '@spleed/integrations/slack'
 import { VercelBrowserClient } from '@spleed/integrations/vercel-browser'
+import type { BrowserOrchestrator } from '@spleed/integrations/browser'
 import { DeepResearchAgent } from '../agents/deep-research'
 import {
   extractCompanyWebsiteSignals,
@@ -81,6 +82,28 @@ const ICP_PROFILER_FINTECH = '66666666-6666-6666-6666-666666660fb1'
 // ─── Test helpers ─────────────────────────────────────────────────────
 
 const silentLogger = pino({ level: 'silent' })
+
+/**
+ * Sprint 9 CP2 — a BrowserOrchestrator stub that always blocks (Tier 1 then
+ * Tier 2 both fail). Used to simulate a company-website scrape failure now that
+ * the worker scrapes via the orchestrator instead of ctx.vercel directly.
+ */
+function blockingBrowser(blockedBy: 'imperva' | 'cloudflare' | 'unknown' = 'imperva'): BrowserOrchestrator {
+  return {
+    scrape: async () => ({
+      success: false as const,
+      tierUsed: 'vercel_browser' as const,
+      costUsd: 0.003,
+      blockedBy,
+      errorMessage: `blocked_by=${blockedBy}`,
+      latencyMs: 5,
+      attempts: [
+        { tier: 'http_direct' as const, costUsd: 0, latencyMs: 2, success: false, blockedBy: 'cloudflare' as const },
+        { tier: 'vercel_browser' as const, costUsd: 0.003, latencyMs: 3, success: false, blockedBy },
+      ],
+    }),
+  } as unknown as BrowserOrchestrator
+}
 
 function makeCtx(orgId: string, traceId = `profiler-test-${Date.now()}`): WorkerContext {
   return {
@@ -497,9 +520,11 @@ describe('processProfilerJob — end-to-end pipeline', () => {
     expect(byProvider['apify']).toBe(2)
     expect(byProvider['anthropic']).toBe(4)
 
-    // All 8 operation_types must appear (set sanity check).
+    // All 8 operation_types must appear (set sanity check). Sprint 9 CP2:
+    // the company scrape is tier-orchestrated — Tier 1 (HTTP-direct) succeeds
+    // in mock, so the op is browser_scrape_http_direct (was scrape_company).
     const opTypes = new Set(events.map((e) => e.operationType))
-    expect(opTypes).toContain('scrape_company')
+    expect(opTypes).toContain('browser_scrape_http_direct')
     expect(opTypes).toContain('extraction_company_website')
     expect(opTypes).toContain('scrape_profile')
     expect(opTypes).toContain('scrape_posts')
@@ -715,16 +740,13 @@ describe('Profiler — error handling', () => {
       linkedinUrl: 'https://linkedin.com/in/sarahchen',
     })
 
-    const failingVercel = new VercelBrowserClient()
-    failingVercel.scrapeCompanyWebsite = async () => {
-      throw new Error('VERCEL_AUTH_FAILED: invalid api key')
-    }
-    // scrapeGoogleNews is NOT patched on this instance, so news still works.
-
+    // Sprint 9 CP2 — the company-website scrape runs through the browser
+    // orchestrator now; inject a blocking one. News (ctx.vercel.scrapeGoogleNews)
+    // + LinkedIn (Apify) use the default mock clients, so they still succeed.
     const result = await processProfilerJob(
       makeJob({ leadId, orgId: PROFILER_ORG_A }),
       makeCtx(PROFILER_ORG_A),
-      { vercel: failingVercel, retryBackoffBaseMs: 1 },
+      { browser: blockingBrowser('imperva'), retryBackoffBaseMs: 1 },
     )
 
     expect(result.status).toBe('enriched')
@@ -754,7 +776,8 @@ describe('Profiler — error handling', () => {
     expect(raw.linkedinSignals).not.toBeNull()
     expect(raw.newsSignals).not.toBeNull()
 
-    // Failed-source cost_event still recorded so dashboards see the spend.
+    // Failed browser_scrape cost_events recorded per tier attempt (dashboards
+    // see the blocked spend + the blocking reason in metadata).
     const failedEvents = await db
       .select()
       .from(costEvents)
@@ -766,7 +789,8 @@ describe('Profiler — error handling', () => {
         ),
       )
     expect(failedEvents.length).toBeGreaterThanOrEqual(1)
-    expect(failedEvents[0]?.errorCode).toContain('VERCEL_AUTH_FAILED')
+    expect(failedEvents.every((e) => e.operationType.startsWith('browser_scrape_'))).toBe(true)
+    expect((failedEvents.at(-1)?.metadata as { blocked_by?: string }).blocked_by).toBe('imperva')
   })
 
   it('non-existent leadId → throws TaggedAgentError(LEAD_NOT_FOUND)', async () => {
@@ -1119,10 +1143,9 @@ describe('processProfilerJob — Sprint 6b full pipeline', () => {
       linkedinUrl: 'https://linkedin.com/in/sarahchen',
     })
 
+    // company_website fails via a blocking orchestrator (Sprint 9 CP2);
+    // news fails via failingVercel.scrapeGoogleNews; linkedin via failingApify.
     const failingVercel = new VercelBrowserClient()
-    failingVercel.scrapeCompanyWebsite = async () => {
-      throw new Error('VERCEL_AUTH_FAILED: invalid api key')
-    }
     failingVercel.scrapeGoogleNews = async () => {
       throw new Error('VERCEL_AUTH_FAILED: invalid api key')
     }
@@ -1145,6 +1168,7 @@ describe('processProfilerJob — Sprint 6b full pipeline', () => {
         {
           vercel: failingVercel,
           apify: failingApify,
+          browser: blockingBrowser('cloudflare'),
           slack,
           retryBackoffBaseMs: 1,
         },
@@ -1310,6 +1334,97 @@ describe('Profiler — multi-tenant evidence_urls (Sprint 6b)', () => {
       .from(leadDossiersTable)
       .where(eq(leadDossiersTable.orgId, PROFILER_ORG_B))
     expect(dossiersFromB).toHaveLength(0)
+  })
+})
+
+// ─── Sprint 9 CP1/CP2 — phone write-back + browser tier cost_events ───
+
+describe('Profiler — Sprint 9 phone extraction + browser tiers', () => {
+  it('extracted phone → leads.phone written; no phone → existing value preserved (no clobber)', async () => {
+    // Lead A: andeanfactoring.co company-website fixture carries contactPhone
+    // → Profiler normalizes it to E.164 and writes leads.phone.
+    const leadWithPhone = await createLead({
+      orgId: PROFILER_ORG_B,
+      icpId: ICP_PROFILER_FINTECH,
+      fullName: 'Camila Restrepo',
+      firstName: 'Camila',
+      lastName: 'Restrepo',
+      company: 'Andean Factoring',
+      role: 'CEO',
+      companyDomain: 'andeanfactoring.co',
+    })
+    await processProfilerJob(
+      makeJob({ leadId: leadWithPhone, orgId: PROFILER_ORG_B }),
+      makeCtx(PROFILER_ORG_B),
+    )
+    const db = getServiceClient()
+    const [a] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadWithPhone))
+    expect(a?.status).toBe('enriched')
+    expect(a?.phone).toBe('+5715551234') // normalized from '+57 1 555 1234'
+
+    // Lead B: pulseanalytics.io has no contact phone and no LinkedIn source →
+    // the worker must NOT clobber a phone already on the row.
+    const leadNoPhone = await createLead({
+      orgId: PROFILER_ORG_A,
+      icpId: ICP_PROFILER_SAAS,
+      fullName: 'Sarah Chen',
+      firstName: 'Sarah',
+      lastName: 'Chen',
+      company: 'Pulse Analytics',
+      role: 'Founder',
+      companyDomain: 'pulseanalytics.io',
+    })
+    await db.update(leadsTable).set({ phone: '+13334445555' }).where(eq(leadsTable.id, leadNoPhone))
+    await processProfilerJob(
+      makeJob({ leadId: leadNoPhone, orgId: PROFILER_ORG_A }),
+      makeCtx(PROFILER_ORG_A),
+    )
+    const [b] = await db.select().from(leadsTable).where(eq(leadsTable.id, leadNoPhone))
+    expect(b?.status).toBe('enriched')
+    expect(b?.phone).toBe('+13334445555') // preserved — not overwritten with null
+  })
+
+  it('browser block → one browser_scrape_<tier> cost_event per attempt (escalation → 2 rows)', async () => {
+    const leadId = await createLead({
+      orgId: PROFILER_ORG_A,
+      icpId: ICP_PROFILER_SAAS,
+      fullName: 'Sarah Chen',
+      firstName: 'Sarah',
+      lastName: 'Chen',
+      company: 'Pulse Analytics',
+      role: 'Founder',
+      companyDomain: 'pulseanalytics.io',
+      linkedinUrl: 'https://linkedin.com/in/sarahchen',
+    })
+    // blockingBrowser returns 2 attempts (http_direct → vercel_browser, both
+    // blocked) — the worker maps attempts[] 1:1 to browser_scrape cost_events.
+    await processProfilerJob(
+      makeJob({ leadId, orgId: PROFILER_ORG_A }),
+      makeCtx(PROFILER_ORG_A),
+      { browser: blockingBrowser('imperva'), retryBackoffBaseMs: 1 },
+    )
+
+    const db = getServiceClient()
+    // Filter to browser_scrape_* — the news source also writes a vercel_browser
+    // row (scrape_news), so scope by operation_type, not provider.
+    const allEvents = await db
+      .select()
+      .from(costEvents)
+      .where(eq(costEvents.orgId, PROFILER_ORG_A))
+    const browserEvents = allEvents.filter((e) => e.operationType.startsWith('browser_scrape_'))
+
+    expect(browserEvents).toHaveLength(2)
+    const byTier = new Map(
+      browserEvents.map((e) => [(e.metadata as { tier?: string }).tier, e]),
+    )
+    expect(byTier.has('http_direct')).toBe(true)
+    expect(byTier.has('vercel_browser')).toBe(true)
+    expect(browserEvents.every((e) => e.operationType.startsWith('browser_scrape_'))).toBe(true)
+    expect(browserEvents.every((e) => e.success === false)).toBe(true)
+    // The escalated (2nd) attempt links back to the tier that bounced it.
+    expect((byTier.get('vercel_browser')?.metadata as { escalated_from?: string }).escalated_from).toBe(
+      'http_direct',
+    )
   })
 })
 

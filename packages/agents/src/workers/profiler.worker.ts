@@ -15,8 +15,16 @@ import {
   type ProfilerSourceName,
 } from '@spleed/integrations/anthropic'
 import { ApifyClient } from '@spleed/integrations/apify'
+import {
+  BrowserOrchestrator,
+  createDefaultBrowserOrchestrator,
+} from '@spleed/integrations/browser'
 import { SlackWebhookClient } from '@spleed/integrations/slack'
-import { VercelBrowserClient } from '@spleed/integrations/vercel-browser'
+import {
+  VercelBrowserClient,
+  type CompanyWebsitePageContent,
+} from '@spleed/integrations/vercel-browser'
+import { normalizePhone } from '@spleed/shared'
 import { DeepResearchAgent } from '../agents/deep-research'
 import {
   extractCompanyWebsiteSignals,
@@ -111,6 +119,8 @@ export interface ProcessProfilerJobOverrides {
   slack?: SlackWebhookClient
   /** Sprint 7b — inject a custom DeepResearchAgent (tests force throw/empty). */
   deepResearchAgent?: DeepResearchAgent
+  /** Sprint 9 CP2 — inject a custom BrowserOrchestrator (tests force a block). */
+  browser?: BrowserOrchestrator
   retryBackoffBaseMs?: number
   retryMaxAttempts?: number
   /** Force storage helper mock mode regardless of env (tests use this). */
@@ -198,6 +208,12 @@ interface SourceExtractionResult {
   evidenceUrls: UploadedScreenshot[]
   /** Sum of scrape, screenshot, and extraction costs for this source. */
   totalCostUsd: number
+  /**
+   * Sprint 9 — raw phone surfaced by this source (LinkedIn contact / company
+   * website contact line), if any. Normalized + written to leads.phone by the
+   * worker. Undefined when the source carries no phone.
+   */
+  phone?: string | null
 }
 
 /**
@@ -265,7 +281,10 @@ async function captureAndUploadScreenshots(args: {
 }
 
 async function scrapeAndExtractCompanyWebsite(
-  ctx: ScrapeAndExtractBaseContext & { vercel: VercelBrowserClient },
+  ctx: ScrapeAndExtractBaseContext & {
+    vercel: VercelBrowserClient
+    browser: BrowserOrchestrator
+  },
 ): Promise<SourceExtractionResult> {
   if (!ctx.lead.companyDomain) {
     // Caller should have filtered this out — defensive only.
@@ -275,64 +294,65 @@ async function scrapeAndExtractCompanyWebsite(
       { classification: 'permanent' },
     )
   }
+  const domain = ctx.lead.companyDomain
 
-  // ─── Scrape ────────────────────────────────────────────────────────
-  const scrapeStart = Date.now()
-  let scrapeResult
-  try {
-    scrapeResult = await withTransientRetry(
-      () => ctx.vercel.scrapeCompanyWebsite(ctx.lead.companyDomain!),
-      'vercel_browser',
-      {
-        maxRetries: ctx.retryMaxAttempts ?? 3,
-        backoffBaseMs: ctx.retryBackoffBaseMs,
-      },
-    )
-  } catch (scrapeErr) {
-    const category = classifyError(scrapeErr, 'vercel_browser')
-    await ctx.raw.insert(costEvents).values({
+  // ─── Scrape (Sprint 9 CP2: tier-orchestrated HTTP-direct → Vercel) ──
+  const scrapeRes = await ctx.browser.scrape({
+    url: domain,
+    mockShape: 'CompanyWebsitePageContent',
+  })
+
+  // One cost_event per tier attempt (browser_scrape_<tier>). provider=
+  // 'vercel_browser' is the browser provider family — metadata.tier carries the
+  // precise tier (the cost_provider enum has no per-tier values yet; BACKLOG-064
+  // adds them when per-provider billing analysis lands). escalated_from links a
+  // retry to the tier that bounced it. foldScreenshotUsd is added to the
+  // successful tier's row so the dossier's screenshot cost stays accounted.
+  const browserCostRows = (foldScreenshotUsd: number): Array<typeof costEvents.$inferInsert> =>
+    scrapeRes.attempts.map((a, i) => ({
       orgId: ctx.orgId,
       runId: ctx.scoutRunId ?? null,
-      agentType: 'profiler',
-      provider: 'vercel_browser',
-      operationType: 'scrape_company',
-      costUsd: '0.000000',
-      latencyMs: Date.now() - scrapeStart,
-      success: false,
-      errorCode: scrapeErr instanceof Error ? scrapeErr.message.slice(0, 200) : 'UNKNOWN',
-      metadata: { lead_id: ctx.lead.id, domain: ctx.lead.companyDomain, category },
-    })
-    throw scrapeErr
+      agentType: 'profiler' as const,
+      provider: 'vercel_browser' as const,
+      operationType: `browser_scrape_${a.tier}`,
+      costUsd: (a.costUsd + (a.success ? foldScreenshotUsd : 0)).toFixed(6),
+      latencyMs: a.latencyMs,
+      success: a.success,
+      errorCode: a.success ? null : a.blockedBy ?? 'unknown',
+      metadata: {
+        lead_id: ctx.lead.id,
+        url_domain: domain,
+        tier: a.tier,
+        ...(a.blockedBy ? { blocked_by: a.blockedBy } : {}),
+        ...(i > 0 ? { escalated_from: scrapeRes.attempts[i - 1]!.tier } : {}),
+        ...(a.success && foldScreenshotUsd > 0 ? { screenshot_cost_usd: foldScreenshotUsd } : {}),
+      },
+    }))
+
+  if (!scrapeRes.success) {
+    await ctx.raw.insert(costEvents).values(browserCostRows(0))
+    throw new TaggedAgentError(
+      'WEBSITE_SCRAPE_BLOCKED',
+      `company website scrape blocked (blocked_by=${scrapeRes.blockedBy}) after ${scrapeRes.attempts.length} tier(s)`,
+      { classification: 'permanent' },
+    )
   }
+  const pageContent = scrapeRes.data as CompanyWebsitePageContent
 
   // ─── Extract ──────────────────────────────────────────────────────
   let extractResult
   try {
     extractResult = await extractCompanyWebsiteSignals({
-      pageContent: scrapeResult.pageContent,
+      pageContent,
       lead: ctx.lead,
       icp: ctx.icp,
       anthropicClient: ctx.anthropic,
     })
   } catch (extractErr) {
     const category = classifyError(extractErr, 'anthropic')
-    // Persist BOTH the scrape success (already done) AND the extract failure.
+    // Persist the (successful) browser attempts AND the extraction failure.
     await ctx.raw.insert(costEvents).values([
-      {
-        orgId: ctx.orgId,
-        runId: ctx.scoutRunId ?? null,
-        agentType: 'profiler',
-        provider: 'vercel_browser',
-        operationType: 'scrape_company',
-        costUsd: scrapeResult.costUsd.toFixed(6),
-        latencyMs: Date.now() - scrapeStart,
-        success: true,
-        metadata: {
-          lead_id: ctx.lead.id,
-          domain: ctx.lead.companyDomain,
-          final_url: scrapeResult.metadata.finalUrl,
-        },
-      },
+      ...browserCostRows(0),
       {
         orgId: ctx.orgId,
         runId: ctx.scoutRunId ?? null,
@@ -352,7 +372,7 @@ async function scrapeAndExtractCompanyWebsite(
   // ─── Per-hook screenshots ─────────────────────────────────────────
   const { evidenceUrls, screenshotCostUsd } = await captureAndUploadScreenshots({
     hooks: extractResult.signals.hook_candidates,
-    sourceUrl: scrapeResult.metadata.finalUrl,
+    sourceUrl: `https://${domain}`,
     sourceType: 'company_website',
     orgId: ctx.orgId,
     leadId: ctx.lead.id,
@@ -361,26 +381,9 @@ async function scrapeAndExtractCompanyWebsite(
     logger: ctx.logger,
   })
 
-  // ─── cost_events (2 rows: scrape with screenshots + extraction) ───
-  const scrapeCostTotal = scrapeResult.costUsd + screenshotCostUsd
+  // ─── cost_events (per-tier browser_scrape rows + extraction) ──────
   await ctx.raw.insert(costEvents).values([
-    {
-      orgId: ctx.orgId,
-      runId: ctx.scoutRunId ?? null,
-      agentType: 'profiler',
-      provider: 'vercel_browser',
-      operationType: 'scrape_company',
-      costUsd: scrapeCostTotal.toFixed(6),
-      latencyMs: Date.now() - scrapeStart,
-      success: true,
-      metadata: {
-        lead_id: ctx.lead.id,
-        domain: ctx.lead.companyDomain,
-        final_url: scrapeResult.metadata.finalUrl,
-        screenshots_count: evidenceUrls.length,
-        screenshot_cost_usd: screenshotCostUsd,
-      },
-    },
+    ...browserCostRows(screenshotCostUsd),
     {
       orgId: ctx.orgId,
       runId: ctx.scoutRunId ?? null,
@@ -405,7 +408,8 @@ async function scrapeAndExtractCompanyWebsite(
     sourceName: 'company_website',
     signals: extractResult.signals,
     evidenceUrls,
-    totalCostUsd: scrapeCostTotal + extractResult.costUsd,
+    totalCostUsd: scrapeRes.costUsd + screenshotCostUsd + extractResult.costUsd,
+    phone: pageContent.contactPhone ?? null,
   }
 }
 
@@ -588,6 +592,7 @@ async function scrapeAndExtractLinkedin(
     evidenceUrls,
     totalCostUsd:
       profileResult.costUsd + postsResult.costUsd + screenshotCostUsd + extractResult.costUsd,
+    phone: profileResult.profile.phone ?? null,
   }
 }
 
@@ -1041,6 +1046,9 @@ export async function processProfilerJob(
   const vercel = overrides.vercel ?? new VercelBrowserClient()
   const apify = overrides.apify ?? new ApifyClient()
   const anthropic = overrides.anthropic ?? new AnthropicClient({ apiKey: 'mock' })
+  // Sprint 9 CP2 — tier-orchestrated company-website scrape (Tier 1 HTTP-direct
+  // → Tier 2 Vercel; Tier 2 wraps `vercel` so mock/live mode aligns).
+  const browser = overrides.browser ?? createDefaultBrowserOrchestrator(vercel)
 
   // Sprint 7a — leads.{fullName, firstName, lastName, company, role}
   // are nullable post-migration 0007 (manual ingest path may create a
@@ -1082,7 +1090,7 @@ export async function processProfilerJob(
   try {
     // ─── Phase 5: Run 3 sources in parallel ─────────────────────────
     const sourceResults = await Promise.allSettled<SourceExtractionResult>([
-      scrapeAndExtractCompanyWebsite({ ...baseCtx, vercel }),
+      scrapeAndExtractCompanyWebsite({ ...baseCtx, vercel, browser }),
       lead.linkedinUrl
         ? scrapeAndExtractLinkedin({ ...baseCtx, vercel, apify })
         : Promise.reject(
@@ -1380,10 +1388,27 @@ export async function processProfilerJob(
         and(eq(leadDossiersTable.leadId, leadId), eq(leadDossiersTable.orgId, orgId)),
       )
 
-    // ─── Phase 10: Mark lead as enriched ───────────────────────────
+    // ─── Phase 10: Mark lead as enriched (+ write extracted phone) ──
+    // Collect a phone across sources — LinkedIn contact preferred (personal),
+    // then the company website line. Normalize to E.164; only write when we
+    // found a valid one (never overwrite an existing phone with null).
+    const rawPhone =
+      successful.find((s) => s.sourceName === 'linkedin')?.phone ??
+      successful.find((s) => s.sourceName === 'company_website')?.phone ??
+      null
+    const extractedPhone = normalizePhone(rawPhone)
+    if (extractedPhone) {
+      ctx.logger.info({ leadId, source: 'profiler' }, '[profiler] phone extracted')
+    }
+
     await raw
       .update(leadsTable)
-      .set({ status: 'enriched', enrichedAt: new Date(), updatedAt: new Date() })
+      .set({
+        status: 'enriched',
+        enrichedAt: new Date(),
+        updatedAt: new Date(),
+        ...(extractedPhone ? { phone: extractedPhone } : {}),
+      })
       .where(and(eq(leadsTable.id, leadId), eq(leadsTable.orgId, orgId)))
 
     const deepResearchCostUsd = deepResearchOutput

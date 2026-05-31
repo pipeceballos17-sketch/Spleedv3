@@ -468,9 +468,28 @@ export interface GenerateIcpStarterGuidanceInput {
   /** Mock lookup hint — the raw ICP description (keyword-matched). */
   icpDescriptionHint?: string
 }
+/**
+ * A public data source Hermes recommends for an ICP (Sprint 9 CP3). This is a
+ * RECOMMENDATION + reasoning only — the actual HTTP/scrape adapters land
+ * Sprint 9.5+ (with Juan's validated endpoints). `access` is a hint for the
+ * future adapter tier, not a wired capability.
+ */
+export interface RecommendedSource {
+  /** Stable snake_case id, e.g. 'sec_edgar', 'fmcsa_socrata', 'ucc_state'. */
+  id: string
+  /** Human-readable label, e.g. 'SEC EDGAR filings'. */
+  label: string
+  /** Adapter-tier hint for Sprint 9.5+ wiring. */
+  access: 'http_api' | 'browser_scrape' | 'manual'
+  /** 1 sentence: why this source matters for THIS ICP. */
+  relevance: string
+}
+
 export interface IcpStarterGuidance {
   voiceGuidance: string
   footerTemplate: string
+  /** Sprint 9 CP3 — public sources relevant to this ICP (may be empty). */
+  recommendedSources: RecommendedSource[]
 }
 export interface GenerateIcpStarterGuidanceResult {
   guidance: IcpStarterGuidance

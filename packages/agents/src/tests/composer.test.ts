@@ -177,3 +177,59 @@ describe('processComposerJob — Sprint 8.2', () => {
     )
   })
 })
+
+// ─── Sprint 9 CP1 — Composer Phase 0 channel resolution with lead.phone ─
+
+const ICP_IM = 'c0000000-0000-4000-8000-0000000000a1'
+const LEAD_PHONE = 'c0000000-0000-4000-8000-0000000000a2'
+const LEAD_NOCONTACT = 'c0000000-0000-4000-8000-0000000000a3'
+
+describe('processComposerJob — Phase 0 channel (Sprint 9 phone)', () => {
+  async function seedDossier(leadId: string): Promise<void> {
+    const db = getServiceClient()
+    await db.insert(leadDossiersTable).values({
+      leadId, orgId: ORG, enrichedBy: 'profiler_agent_v3', confidenceScore: 0.9,
+      rawSignals: {
+        synthesis: {
+          recommendedAngle: 'Tie outreach to recent growth signal.', painInferred: 'Manual outbound.',
+          confidenceScore: 0.9,
+          hookCandidates: [{ hook: 'Recent expansion', evidence: 'Press', sourceName: 'news', confidence: 0.9 }],
+        },
+      },
+    })
+  }
+
+  it('ICP prefers iMessage + lead.phone present → draft.channel=imessage', async () => {
+    const db = getServiceClient()
+    await db.insert(icpsTable).values({
+      id: ICP_IM, orgId: ORG, name: 'iMessage ICP', definitionNaturalLanguage: 'Founders reachable by text.',
+      parsedFilters: { version: '1', industries: ['saas'] }, isDefault: false, preferredChannel: 'imessage',
+      outreachVoiceGuidance: 'Direct, founder-to-founder.', outreachFooterTemplate: '{{company}} · Unsubscribe',
+    })
+    await db.insert(leadsTable).values({
+      id: LEAD_PHONE, orgId: ORG, icpId: ICP_IM, status: 'enriched',
+      fullName: 'Diego Vargas', company: 'Vargas Co', role: 'Founder',
+      companyDomain: 'vargas.co', phone: '+13334445555', foundVia: 'test', ingestSource: 'manual_url',
+    })
+    await seedDossier(LEAD_PHONE)
+
+    const result = await processComposerJob({ data: { orgId: ORG, leadId: LEAD_PHONE, mode: 'initial' } }, makeCtx())
+    expect(result.status).toBe('drafted')
+    const [draft] = await db.select().from(outreachDraftsTable).where(eq(outreachDraftsTable.id, result.draftId!))
+    expect(draft?.channel).toBe('imessage') // ICP imessage + phone on file → Phase 0 routes iMessage
+  })
+
+  it('no email + no phone → manual lookup (no_contact, no draft)', async () => {
+    const db = getServiceClient()
+    await db.insert(leadsTable).values({
+      id: LEAD_NOCONTACT, orgId: ORG, icpId: ICP, status: 'enriched',
+      fullName: 'Ghost Lead', company: 'Nowhere Inc', role: 'Founder',
+      companyDomain: 'nowhere.co', email: null, phone: null, foundVia: 'test', ingestSource: 'manual_url',
+    })
+    await seedDossier(LEAD_NOCONTACT)
+
+    const result = await processComposerJob({ data: { orgId: ORG, leadId: LEAD_NOCONTACT, mode: 'initial' } }, makeCtx())
+    expect(result.status).toBe('no_contact')
+    expect(result.draftId).toBeUndefined()
+  })
+})

@@ -146,6 +146,11 @@ export const leads = pgTable(
     linkedinUrl: text('linkedin_url'),
     xHandle: text('x_handle'),
     githubHandle: text('github_handle'),
+    // Sprint 9 (Migration 0011) — phone for the iMessage channel. Populated by
+    // Profiler phone extraction (LinkedIn contact + company website), normalized
+    // to E.164. Nullable; no DB constraint (app-layer validation via
+    // @spleed/shared normalizePhone). No index until query patterns need one.
+    phone: text('phone'),
 
     // Shipping address (Gifter, Sprint 5+)
     officeAddress: jsonb('office_address').$type<{
