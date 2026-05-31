@@ -15,11 +15,17 @@
  * create_secret / decrypted_secrets RPCs + the org_integrations(kind='anthropic')
  * row.
  *
- * Mock-default gate mirrors the clients (ANTHROPIC_LIVE !== 'true').
+ * Key storage and real LLM calls are independent concerns: this store's backing
+ * is gated on ANTHROPIC_VAULT_LIVE (its own future flag, unset today → Map), NOT
+ * on ANTHROPIC_LIVE. ANTHROPIC_LIVE controls only whether the AnthropicClient
+ * performs real LLM calls — storing a key must work regardless of call mode.
  */
 
-function isMockByDefault(): boolean {
-  return process.env.ANTHROPIC_LIVE !== 'true'
+function useVaultRpc(): boolean {
+  // Live Supabase Vault RPC lands BACKLOG-044; until then the in-process Map
+  // is the backing store regardless of ANTHROPIC_LIVE (which only controls real
+  // LLM calls, not key storage). Gate the live RPC on its own future flag.
+  return process.env.ANTHROPIC_VAULT_LIVE === 'true'
 }
 
 /** In-process stand-in for Supabase Vault. Keyed by `anthropic_api_key_{orgId}`. */
@@ -35,7 +41,7 @@ export function resetMockAnthropicTokenStore(): void {
 }
 
 export async function storeAnthropicApiKey(orgId: string, apiKey: string): Promise<void> {
-  if (isMockByDefault()) {
+  if (!useVaultRpc()) {
     MOCK_VAULT.set(vaultKey(orgId), apiKey)
     return
   }
@@ -43,14 +49,14 @@ export async function storeAnthropicApiKey(orgId: string, apiKey: string): Promi
 }
 
 export async function getAnthropicApiKey(orgId: string): Promise<string | null> {
-  if (isMockByDefault()) {
+  if (!useVaultRpc()) {
     return MOCK_VAULT.get(vaultKey(orgId)) ?? null
   }
   return getAnthropicApiKeyLive(orgId)
 }
 
 export async function deleteAnthropicApiKey(orgId: string): Promise<void> {
-  if (isMockByDefault()) {
+  if (!useVaultRpc()) {
     MOCK_VAULT.delete(vaultKey(orgId))
     return
   }

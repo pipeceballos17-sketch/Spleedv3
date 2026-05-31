@@ -3,15 +3,21 @@
  *
  * Clone of anthropic/token-store.ts: the real per-tenant key lives in Supabase
  * Vault keyed by `resend_api_key_{orgId}` (orgs.resend_vault_ref holds the
- * reference). Mock-default in-process Map so the BYOK flow + the Outreach
- * Operator's live key load round-trip in the same process. Live Vault RPC
- * deferred to Sprint 9.5+ (BACKLOG-044).
+ * reference). Until the real Vault RPC lands (BACKLOG-044), the in-process Map
+ * is the backing store so the BYOK flow + the Outreach Operator's key load
+ * round-trip in the same process.
  *
- * Gate mirrors the client (RESEND_LIVE !== 'true').
+ * Key storage and real sending are independent concerns: this store's backing
+ * is gated on RESEND_VAULT_LIVE (its own future flag, unset today → Map), NOT
+ * on RESEND_LIVE. RESEND_LIVE controls only whether the ResendClient performs a
+ * real send — storing a key must work regardless of send mode.
  */
 
-function isMockByDefault(): boolean {
-  return process.env.RESEND_LIVE !== 'true'
+function useVaultRpc(): boolean {
+  // Live Supabase Vault RPC lands BACKLOG-044; until then the in-process Map
+  // is the backing store regardless of RESEND_LIVE (which only controls real
+  // sending, not key storage). Gate the live RPC on its own future flag.
+  return process.env.RESEND_VAULT_LIVE === 'true'
 }
 
 /** In-process stand-in for Supabase Vault. Keyed by `resend_api_key_{orgId}`. */
@@ -27,7 +33,7 @@ export function resetMockResendTokenStore(): void {
 }
 
 export async function storeResendApiKey(orgId: string, apiKey: string): Promise<void> {
-  if (isMockByDefault()) {
+  if (!useVaultRpc()) {
     MOCK_VAULT.set(vaultKey(orgId), apiKey)
     return
   }
@@ -35,14 +41,14 @@ export async function storeResendApiKey(orgId: string, apiKey: string): Promise<
 }
 
 export async function getResendApiKey(orgId: string): Promise<string | null> {
-  if (isMockByDefault()) {
+  if (!useVaultRpc()) {
     return MOCK_VAULT.get(vaultKey(orgId)) ?? null
   }
   return getResendApiKeyLive(orgId)
 }
 
 export async function deleteResendApiKey(orgId: string): Promise<void> {
-  if (isMockByDefault()) {
+  if (!useVaultRpc()) {
     MOCK_VAULT.delete(vaultKey(orgId))
     return
   }
